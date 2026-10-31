@@ -6,6 +6,7 @@ import 'package:conduit_core/features/chat/composer/ask_conduit.dart';
 import 'package:conduit_core/features/chat/providers/chat_providers.dart';
 
 import '../../l10n/app_localizations.dart';
+import '../widgets/platform_ui/platform_ui.dart';
 
 bool get _canShowAskConduitSelectionAction =>
     !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
@@ -67,14 +68,15 @@ Widget buildAskConduitSelectionAreaContextMenu({
     label: AppLocalizations.of(selectableRegionState.context)!.askConduitAction,
   );
 
-  if (identical(items, defaultItems)) {
-    return AdaptiveTextSelectionToolbar.selectableRegion(
-      selectableRegionState: selectableRegionState,
-    );
-  }
-
-  return AdaptiveTextSelectionToolbar.buttonItems(
+  return AdaptiveTextSelectionMenu(
+    selectionRect: TextSelectionToolbarAnchors.getSelectionRect(
+      selectableRegionState.context.findRenderObject()! as RenderBox,
+      selectableRegionState.startGlyphHeight,
+      selectableRegionState.endGlyphHeight,
+      selectableRegionState.selectionEndpoints,
+    ),
     anchors: selectableRegionState.contextMenuAnchors,
     buttonItems: items,
+    onDismiss: () => selectableRegionState.hideToolbar(false),
   );
 }
