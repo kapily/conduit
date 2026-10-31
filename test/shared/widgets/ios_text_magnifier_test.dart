@@ -10,9 +10,20 @@ void main() {
   const channel = MethodChannel('app.cogwheel.conduit/text_magnifier');
   final binding = TestWidgetsFlutterBinding.ensureInitialized();
   late List<MethodCall> calls;
+  late List<Object?> haptics;
 
   setUp(() {
     calls = [];
+    haptics = [];
+    binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'HapticFeedback.vibrate') {
+          haptics.add(call.arguments);
+        }
+        return null;
+      },
+    );
     binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (
       call,
     ) async {
@@ -23,6 +34,10 @@ void main() {
 
   tearDown(() {
     binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, null);
+    binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      null,
+    );
   });
 
   ValueNotifier<MagnifierInfo> geometry() => ValueNotifier(
@@ -49,6 +64,27 @@ void main() {
       ),
     ),
   );
+
+  testWidgets('native loupe gives one selection haptic per gesture', (
+    tester,
+  ) async {
+    final info = geometry();
+    addTearDown(info.dispose);
+    await pumpMagnifier(tester, info);
+    await tester.pump();
+    expect(haptics, ['HapticFeedbackType.selectionClick']);
+    info.value = MagnifierInfo.empty;
+    await tester.pump();
+    expect(haptics, hasLength(1));
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+    expect(haptics, hasLength(1));
+    await pumpMagnifier(tester, info);
+    await tester.pump();
+    expect(haptics, List.filled(2, 'HapticFeedbackType.selectionClick'));
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+  }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
 
   testWidgets('forwards full-view geometry and ends the owned session', (
     tester,
@@ -131,6 +167,7 @@ void main() {
       await pumpMagnifier(tester, info);
       await tester.pump();
       expect(find.byType(CupertinoTextMagnifier), findsOneWidget);
+      expect(haptics, isEmpty);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pump();
@@ -152,8 +189,10 @@ void main() {
     await pumpMagnifier(tester, info);
     info.value = MagnifierInfo.empty;
     expect(calls.length, 1);
+    expect(haptics, isEmpty);
     reply.complete(true);
     await tester.pump();
+    expect(haptics, ['HapticFeedbackType.selectionClick']);
     expect(calls.last.method, 'move');
     expect(calls.last.arguments['x'], 0.0);
     await tester.pumpWidget(const SizedBox.shrink());
@@ -205,6 +244,7 @@ void main() {
     await tester.pump();
     expect(find.byType(CupertinoTextMagnifier), findsOneWidget);
     expect(calls.where((call) => call.method == 'move'), isEmpty);
+    expect(haptics, isEmpty);
     expect(calls.last.method, 'end');
     expect(calls.last.arguments['session'], calls.first.arguments['session']);
     await tester.pumpWidget(const SizedBox.shrink());
@@ -230,6 +270,7 @@ void main() {
     reply.complete(true);
     await tester.pump();
     expect(calls.map((call) => call.method), ['begin', 'end']);
+    expect(haptics, isEmpty);
     expect(tester.takeException(), isNull);
   });
 
@@ -277,12 +318,14 @@ void main() {
     final field = find.byType(CupertinoTextField);
     await tester.tap(field);
     await tester.pump(kDoubleTapTimeout + const Duration(milliseconds: 100));
+    expect(haptics, isEmpty);
     final before = tester.getRect(field);
     final text = controller.text;
     final gesture = await tester.startGesture(before.center);
     await tester.pump(kLongPressTimeout + const Duration(milliseconds: 100));
     await tester.pump();
     expect(calls.where((call) => call.method == 'begin'), isNotEmpty);
+    expect(haptics, ['HapticFeedbackType.selectionClick']);
     final initialOffset = controller.selection.extentOffset;
     await gesture.moveBy(const Offset(-45, 0));
     await tester.pump();
@@ -290,10 +333,12 @@ void main() {
     expect(controller.selection.extentOffset, lessThan(initialOffset));
     expect(tester.getRect(field), before);
     expect(controller.text, text);
+    expect(haptics, hasLength(1));
     await gesture.up();
     await tester.pump();
     await tester.pump();
     expect(calls.last.method, 'end');
+    expect(haptics, hasLength(1));
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump();
   }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));

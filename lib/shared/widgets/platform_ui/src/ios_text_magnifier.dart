@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:conduit/core/services/haptic_service.dart';
 import 'package:cupertino_ui/cupertino_ui.dart';
 import 'package:flutter/services.dart';
 
@@ -108,6 +109,7 @@ class _IosTextMagnifierState extends State<IosTextMagnifier> {
     }
     _nativeReady = shown;
     if (shown) {
+      unawaited(ConduitHaptics.selectionClick());
       // The finger can move while the platform reply is in flight.
       _move();
     } else {
