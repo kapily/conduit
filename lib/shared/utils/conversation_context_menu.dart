@@ -130,6 +130,7 @@ class _ConduitContextMenuState extends State<ConduitContextMenu> {
 
   Widget _buildCupertinoContextMenu(BuildContext context) {
     final contextMenu = CupertinoContextMenu.builder(
+      enableHapticFeedback: true,
       actions: [
         for (final action in widget.actions)
           CupertinoContextMenuAction(

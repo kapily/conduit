@@ -6,6 +6,7 @@ import 'package:conduit/shared/widgets/platform_ui/platform_ui.dart';
 import 'package:cupertino_ui/cupertino_ui.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/gestures.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 Widget _buildHarness(Widget child) {
@@ -117,12 +118,22 @@ void main() {
     expect(buildCount, 0);
   });
 
-  testWidgets('builds the chat preview surface only after a long press', (
+  testWidgets('opens the chat preview with exactly one long-press haptic', (
     tester,
   ) async {
     PlatformUiCapabilities.debugPlatformOverride = TargetPlatform.iOS;
     PlatformUiCapabilities.debugIOSMajorVersionOverride = 27;
     PlatformUiCapabilities.debugNativeIOS26Override = true;
+    final haptics = <Object?>[];
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'HapticFeedback.vibrate') {
+          haptics.add(call.arguments);
+        }
+        return null;
+      },
+    );
 
     await tester.pumpWidget(
       _buildHarness(
@@ -156,6 +167,17 @@ void main() {
     );
     expect(find.byKey(previewKey), findsNothing);
 
+    await tester.tap(find.text('Preview chat'));
+    await tester.pumpAndSettle();
+    final cancelled = await tester.startGesture(
+      tester.getCenter(find.text('Preview chat')),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await cancelled.cancel();
+    await tester.pumpAndSettle();
+    expect(haptics, isEmpty);
+    expect(find.byKey(previewKey), findsNothing);
+
     final gesture = await tester.startGesture(
       tester.getCenter(find.text('Preview chat')),
     );
@@ -163,8 +185,12 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
 
     expect(find.byKey(previewKey), findsOneWidget);
+    await tester.pumpAndSettle();
+    expect(find.text('Copy'), findsOneWidget);
+    expect(haptics, ['HapticFeedbackType.heavyImpact']);
 
     await gesture.up();
     await tester.pumpAndSettle();
+    expect(haptics, ['HapticFeedbackType.heavyImpact']);
   });
 }
