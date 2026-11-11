@@ -14,7 +14,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// Past the block threshold and, with ChunkedBlockColumn's default chunk
-/// sizes (48 first, then 96 per frame), still two reveal frames; larger
+/// sizes (48 first, then 80 per frame), still two reveal frames; larger
 /// documents only add layout time.
 const int _largeParagraphCount = markdownChunkedPartInflationThreshold + 32;
 const String _lastParagraph = 'Paragraph ${_largeParagraphCount - 1}';
@@ -177,49 +177,69 @@ void main() {
     }
   });
 
-  for (final wrapped in [false, true]) {
-    testWidgets(
-      'retains block state across insertions (identity wrapper: $wrapped)',
-      (tester) async {
-        const markerKey = ValueKey('retained-block');
-        final marker = StatefulBuilder(
-          key: markerKey,
-          builder: (context, setState) => const Text('Later block'),
-        );
-        final children = <Widget>[
-          for (var index = 0; index < 127; index++)
-            Text('Block $index', key: ValueKey(index)),
-          wrapped
-              ? KeyedSubtree(key: const ValueKey('identity'), child: marker)
-              : marker,
-          for (var index = 128; index < 160; index++)
-            Text('Block $index', key: ValueKey(index)),
-        ];
-        await tester.pumpWidget(
-          _harness(
-            SelectionArea(child: ChunkedBlockColumn(children: children)),
-          ),
-        );
-        await tester.pumpAndSettle();
-        final markerState = tester.state(find.byKey(markerKey));
-        tester
-            .state<SelectableRegionState>(find.byType(SelectableRegion))
-            .selectAll(SelectionChangedCause.keyboard);
-        for (final updated in [
-          [const Text('Inserted block', key: ValueKey('new')), ...children],
-          children,
-        ]) {
+  for (final boundary in [63, 127, 255]) {
+    for (final wrapped in [false, true]) {
+      testWidgets(
+        'retains block state across insertions at $boundary (identity wrapper: $wrapped)',
+        (tester) async {
+          const markerKey = ValueKey('retained-block');
+          final marker = StatefulBuilder(
+            key: markerKey,
+            builder: (context, setState) => const Text('Later block'),
+          );
+          final children = <Widget>[
+            for (var index = 0; index < boundary; index++)
+              Text('Block $index', key: ValueKey(index)),
+            wrapped
+                ? KeyedSubtree(key: const ValueKey('identity'), child: marker)
+                : marker,
+            for (var index = boundary + 1; index < boundary + 33; index++)
+              Text('Block $index', key: ValueKey(index)),
+          ];
           await tester.pumpWidget(
             _harness(
-              SelectionArea(child: ChunkedBlockColumn(children: updated)),
+              SelectionArea(child: ChunkedBlockColumn(children: children)),
             ),
           );
           await tester.pumpAndSettle();
-          expect(tester.takeException(), isNull);
-          expect(tester.state(find.byKey(markerKey)), same(markerState));
-        }
-      },
-    );
+          final markerState = tester.state(find.byKey(markerKey));
+          tester
+              .state<SelectableRegionState>(find.byType(SelectableRegion))
+              .selectAll(SelectionChangedCause.keyboard);
+          for (final updated in [
+            [const Text('Inserted block', key: ValueKey('new')), ...children],
+            children,
+          ]) {
+            await tester.pumpWidget(
+              _harness(
+                SelectionArea(child: ChunkedBlockColumn(children: updated)),
+              ),
+            );
+            await tester.pumpAndSettle();
+            expect(tester.takeException(), isNull);
+            expect(tester.state(find.byKey(markerKey)), same(markerState));
+            final selection = tester.widget<SelectionContainer>(
+              find.byType(SelectionContainer).first,
+            );
+            expect(selection.delegate!.getSelectedContent(), isNull);
+            tester
+                .state<SelectableRegionState>(find.byType(SelectableRegion))
+                .selectAll(SelectionChangedCause.keyboard);
+            expect(
+              RegExp(r'Block (\d+)')
+                  .allMatches(
+                    selection.delegate!.getSelectedContent()!.plainText,
+                  )
+                  .map((match) => int.parse(match.group(1)!)),
+              [
+                ...List.generate(boundary, (index) => index),
+                ...List.generate(32, (index) => boundary + 1 + index),
+              ],
+            );
+          }
+        },
+      );
+    }
   }
 
   testWidgets('large settled documents inflate blocks across frames', (

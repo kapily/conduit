@@ -53,7 +53,6 @@ class ChunkedBlockColumn extends StatefulWidget {
 }
 
 class _ChunkedBlockColumnState extends State<ChunkedBlockColumn> {
-  final _childKeys = <LocalKey, GlobalKey>{};
   late List<Widget> _children;
   late int _revealed;
   bool _revealScheduled = false;
@@ -90,14 +89,12 @@ class _ChunkedBlockColumnState extends State<ChunkedBlockColumn> {
   void _cacheChildren() {
     // An edit can move a keyed block across group boundaries. Keep its subtree
     // alive across that move, and reuse these wrappers during reveal frames.
-    final keys = <LocalKey>{};
     _children = widget.children
         .map((child) {
           final key = child.key;
           if (key is! LocalKey) return child;
-          keys.add(key);
           return KeyedSubtree(
-            key: _childKeys.putIfAbsent(key, GlobalKey.new),
+            key: MarkdownBlockKey(this, key),
             // Replace plain identity wrappers instead of adding another element.
             child: child.runtimeType == KeyedSubtree
                 ? (child as KeyedSubtree).child
@@ -105,7 +102,6 @@ class _ChunkedBlockColumnState extends State<ChunkedBlockColumn> {
           );
         })
         .toList(growable: false);
-    _childKeys.removeWhere((key, _) => !keys.contains(key));
   }
 
   bool get _isComplete => _revealed >= widget.children.length;
@@ -130,7 +126,7 @@ class _ChunkedBlockColumnState extends State<ChunkedBlockColumn> {
 
   @override
   Widget build(BuildContext context) {
-    const groupSize = markdownChunkedPartInflationThreshold;
+    const groupSize = 64;
     // Keep short replies directly selectable, without nested registration.
     // Fixed groups bound selection merging and layout without reparenting
     // children when the reveal batch size changes.
@@ -154,6 +150,23 @@ class _ChunkedBlockColumnState extends State<ChunkedBlockColumn> {
   }
 }
 
+/// Preserves a block across selection groups, scoped to its owning renderer.
+final class MarkdownBlockKey extends GlobalKey {
+  const MarkdownBlockKey(this.owner, this.block) : super.constructor();
+
+  final Object owner;
+  final Object block;
+
+  @override
+  bool operator ==(Object other) =>
+      other is MarkdownBlockKey &&
+      identical(owner, other.owner) &&
+      block == other.block;
+
+  @override
+  int get hashCode => Object.hash(owner, block);
+}
+
 class _BlockGroup extends StatefulWidget {
   const _BlockGroup({required this.children});
 
@@ -166,6 +179,17 @@ class _BlockGroup extends StatefulWidget {
 class _BlockGroupState extends State<_BlockGroup> {
   final _selection = StaticSelectionContainerDelegate();
   final _paragraphSelection = StaticSelectionContainerDelegate();
+
+  @override
+  void didUpdateWidget(covariant _BlockGroup oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.children.first.key != widget.children.first.key) {
+      // An edit moved content between groups; its old selection is no longer valid.
+      context
+          .findAncestorStateOfType<SelectableRegionState>()
+          ?.clearSelection();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {

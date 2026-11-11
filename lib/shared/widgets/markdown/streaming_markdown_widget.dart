@@ -849,20 +849,16 @@ class _StreamingMarkdownWidgetState
 
     final partWidgets = <Widget>[
       for (var index = 0; index < stableParts.length; index += 1)
-        KeyedSubtree(
-          key: ValueKey<String>(
-            'markdown-display-part:${stableParts[index].partId}',
-          ),
-          child: _buildMarkdownWithCitations(
-            document: stableParts[index].document,
-            stateScopeId: _stateScopeIdForPart(stableParts[index]),
-            enableStreamingTextFade:
-                widget.isStreaming &&
-                widget.enableStreamingTextFade &&
-                stableParts[index].isMutableTail,
-            trimLastBlockBottomPadding: index == stableParts.length - 1,
-            trimFirstBlockTopPadding: index == 0,
-          ),
+        _buildMarkdownWithCitations(
+          key: MarkdownBlockKey(this, stableParts[index].partId),
+          document: stableParts[index].document,
+          stateScopeId: _stateScopeIdForPart(stableParts[index]),
+          enableStreamingTextFade:
+              widget.isStreaming &&
+              widget.enableStreamingTextFade &&
+              stableParts[index].isMutableTail,
+          trimLastBlockBottomPadding: index == stableParts.length - 1,
+          trimFirstBlockTopPadding: index == 0,
         ),
     ];
 
@@ -913,6 +909,7 @@ class _StreamingMarkdownWidgetState
   /// Citations like [1], [2] are rendered as clickable
   /// badges inline with the text.
   Widget _buildMarkdownWithCitations({
+    Key? key,
     required CompiledMarkdownDocument document,
     required String? stateScopeId,
     required bool enableStreamingTextFade,
@@ -920,6 +917,7 @@ class _StreamingMarkdownWidgetState
     required bool trimFirstBlockTopPadding,
   }) {
     return ConduitMarkdownWidget(
+      key: key,
       compiledDocument: document,
       onLinkTap: widget.onTapLink,
       imageBuilder: _adaptedImageBuilder,

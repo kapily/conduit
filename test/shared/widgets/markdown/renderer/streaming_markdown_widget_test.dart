@@ -714,7 +714,7 @@ void main() {
 
     expect(parts.length, greaterThanOrEqualTo(2));
     final partIds = parts.map((part) => part.partId).toList();
-    // Unique ids guard the ValueKey('markdown-display-part:<id>') wrappers from
+    // Unique ids keep each display part's key distinct, preventing
     // a duplicate-key crash when a document is split into parts.
     expect(partIds.toSet().length, partIds.length);
   });
