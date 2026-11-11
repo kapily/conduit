@@ -13,7 +13,6 @@ import 'markdown_config.dart';
 import 'markdown_compile_service.dart';
 import 'markdown_display_part.dart';
 import 'markdown_document_controller.dart';
-import 'markdown_render_gate.dart';
 import 'markdown_loading_skeleton.dart';
 
 import 'package:conduit_core/utils/streaming_markdown_preparation.dart';
@@ -204,9 +203,6 @@ class _StreamingMarkdownWidgetState
   bool _isAppForeground = true;
   bool _isRouteVisible = true;
   ImageBuilder? _adaptedImageBuilder;
-  // Chunked block inflation registers here while revealing; completion
-  // re-arms SelectionArea wrapping via the listener.
-  final MarkdownRenderGate _renderGate = MarkdownRenderGate();
 
   CompiledMarkdownDocument? get _compiledDocument =>
       _documentController.compiledDocument;
@@ -223,21 +219,10 @@ class _StreamingMarkdownWidgetState
         _documentController.compiledStreamingRevision == patch.revision;
   }
 
-  void _handleRenderGateChanged() {
-    if (!mounted) return;
-    // The gate flips to incomplete while a chunked descendant inflates —
-    // that is mid-build, where an ancestor setState is illegal. Both edges
-    // of the gate only need to take visual effect by the next frame.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) setState(() {});
-    });
-  }
-
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _renderGate.addListener(_handleRenderGateChanged);
     _isAppForeground = _isLifecycleForeground(
       WidgetsBinding.instance.lifecycleState,
     );
@@ -457,9 +442,6 @@ class _StreamingMarkdownWidgetState
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _renderGate
-      ..removeListener(_handleRenderGateChanged)
-      ..dispose();
     _debugStreamingDelayTimer?.cancel();
     _retirePreparationSession();
     _documentController.dispose();
@@ -801,10 +783,7 @@ class _StreamingMarkdownWidgetState
 
     final result = KeyedSubtree(
       key: _markdownContentKey,
-      child: MarkdownRenderGateScope(
-        gate: _renderGate,
-        child: _buildMarkdownDisplayParts(compiledDocument),
-      ),
+      child: _buildMarkdownDisplayParts(compiledDocument),
     );
 
     // Only wrap in SelectionArea when not streaming, no settled normalization
@@ -813,11 +792,11 @@ class _StreamingMarkdownWidgetState
     // responseDone-gap growing-content path that #540's fix now keeps on screen)
     // must not be made selectable: SelectionArea over rapidly-changing content
     // triggers concurrent-modification errors in Flutter's selection system.
-    // Chunked inflation mutates children per frame, so it also holds this off.
+    // Keep this wrapper stable while a settled document reveals its blocks:
+    // toggling it replaces every Text paragraph's renderer and repeats layout.
     if (widget.isStreaming ||
         _settledPreparationPending ||
-        !hasFreshCompiledDocument ||
-        !_renderGate.isComplete) {
+        !hasFreshCompiledDocument) {
       return result;
     }
 

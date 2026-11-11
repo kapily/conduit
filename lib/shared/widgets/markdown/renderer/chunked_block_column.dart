@@ -1,6 +1,5 @@
+import 'package:flutter/rendering.dart' show ClearSelectionEvent;
 import 'package:material_ui/material_ui.dart';
-
-import '../markdown_render_gate.dart';
 
 /// Region count above which settled markdown regions (root blocks or display
 /// parts) inflate across frames instead of in one.
@@ -18,9 +17,8 @@ const int markdownChunkedPartInflationThreshold = 128;
 /// growing height.
 ///
 /// The widgets are prebuilt by the caller — building them is cheap; only
-/// their inflation is chunked. While unrevealed blocks remain, the region is
-/// registered as incomplete on the enclosing [MarkdownRenderGate] so
-/// SelectionArea wrapping is held off until the tree stops mutating.
+/// their inflation is chunked. Existing children keep their render objects
+/// as subsequent batches are appended.
 class ChunkedBlockColumn extends StatefulWidget {
   const ChunkedBlockColumn({
     required this.children,
@@ -55,39 +53,27 @@ class ChunkedBlockColumn extends StatefulWidget {
 }
 
 class _ChunkedBlockColumnState extends State<ChunkedBlockColumn> {
+  final _childKeys = <LocalKey, GlobalKey>{};
+  late List<Widget> _children;
   late int _revealed;
   bool _revealScheduled = false;
-  MarkdownRenderGate? _gate;
-  bool _holdingGate = false;
 
   @override
   void initState() {
     super.initState();
+    _cacheChildren();
     _revealed =
         widget.revealImmediately ||
             widget.children.length <= widget.initialChunk
         ? widget.children.length
         : widget.initialChunk;
-  }
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    final gate = MarkdownRenderGateScope.maybeOf(context);
-    if (!identical(gate, _gate)) {
-      if (_holdingGate) {
-        _gate?.markRegionComplete();
-        _holdingGate = false;
-      }
-      _gate = gate;
-    }
-    _syncGate();
     _scheduleRevealIfNeeded();
   }
 
   @override
   void didUpdateWidget(covariant ChunkedBlockColumn oldWidget) {
     super.didUpdateWidget(oldWidget);
+    _cacheChildren();
     // Content updates never reset progress: a message that grows (the
     // responseDone gap keeps appending after isStreaming flips false) keeps
     // everything already revealed and streams the appended blocks in;
@@ -98,31 +84,28 @@ class _ChunkedBlockColumnState extends State<ChunkedBlockColumn> {
     } else if (_revealed > widget.children.length) {
       _revealed = widget.children.length;
     }
-    _syncGate();
     _scheduleRevealIfNeeded();
   }
 
-  @override
-  void dispose() {
-    if (_holdingGate) {
-      _gate?.markRegionComplete();
-      _holdingGate = false;
-    }
-    super.dispose();
+  void _cacheChildren() {
+    // An edit can move a keyed block across group boundaries. Keep its subtree
+    // alive across that move, and reuse these wrappers during reveal frames.
+    final keys = <LocalKey>{};
+    _children = widget.children
+        .map((child) {
+          final key = child.key;
+          if (key is! LocalKey) return child;
+          keys.add(key);
+          return KeyedSubtree(
+            key: _childKeys.putIfAbsent(key, GlobalKey.new),
+            child: child,
+          );
+        })
+        .toList(growable: false);
+    _childKeys.removeWhere((key, _) => !keys.contains(key));
   }
 
   bool get _isComplete => _revealed >= widget.children.length;
-
-  void _syncGate() {
-    final shouldHold = !_isComplete;
-    if (shouldHold == _holdingGate) return;
-    _holdingGate = shouldHold;
-    if (shouldHold) {
-      _gate?.markRegionIncomplete();
-    } else {
-      _gate?.markRegionComplete();
-    }
-  }
 
   void _scheduleRevealIfNeeded() {
     if (widget.revealImmediately || _isComplete || _revealScheduled) return;
@@ -137,7 +120,6 @@ class _ChunkedBlockColumnState extends State<ChunkedBlockColumn> {
           widget.children.length,
         );
       });
-      _syncGate();
       _scheduleRevealIfNeeded();
     });
     binding.scheduleFrame();
@@ -145,13 +127,72 @@ class _ChunkedBlockColumnState extends State<ChunkedBlockColumn> {
 
   @override
   Widget build(BuildContext context) {
-    final children = _isComplete
-        ? widget.children
-        : widget.children.sublist(0, _revealed);
+    const groupSize = markdownChunkedPartInflationThreshold;
+    // Keep short replies directly selectable, without nested registration.
+    // Fixed groups bound selection merging and layout without reparenting
+    // children when the reveal batch size changes.
+    final children = _revealed <= groupSize
+        ? (_isComplete ? _children : _children.sublist(0, _revealed))
+        : <Widget>[
+            ..._children.take(groupSize),
+            for (var start = groupSize; start < _revealed; start += groupSize)
+              _BlockGroup(
+                children: _children.sublist(
+                  start,
+                  (start + groupSize).clamp(0, _revealed),
+                ),
+              ),
+          ];
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: children,
     );
+  }
+}
+
+class _BlockGroup extends StatefulWidget {
+  const _BlockGroup({required this.children});
+
+  final List<Widget> children;
+
+  @override
+  State<_BlockGroup> createState() => _BlockGroupState();
+}
+
+class _BlockGroupState extends State<_BlockGroup> {
+  final _selection = StaticSelectionContainerDelegate();
+  final _paragraphSelection = StaticSelectionContainerDelegate();
+
+  @override
+  Widget build(BuildContext context) {
+    final child = Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: widget.children,
+    );
+    final selectable = SelectionContainer.maybeOf(context) != null;
+    return SelectionContainer(
+      delegate: _selection,
+      child: Builder(
+        builder: (context) {
+          // The outer container has now detached from any old SelectionArea.
+          // Release handles while the inner container is still enabled.
+          if (!selectable && _selection.value.hasSelection) {
+            _selection.dispatchSelectionEvent(const ClearSelectionEvent());
+          }
+          return selectable
+              ? SelectionContainer(delegate: _paragraphSelection, child: child)
+              : SelectionContainer.disabled(child: child);
+        },
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    _paragraphSelection.dispose();
+    _selection.dispose();
+    super.dispose();
   }
 }

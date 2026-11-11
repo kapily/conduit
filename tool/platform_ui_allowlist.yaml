@@ -2300,12 +2300,6 @@ exceptions:
     owner: shared-widgets
     reason: "Existing use awaiting migration to the platform UI seam"
     removal: platform-ui-migration
-  - path: lib/shared/widgets/markdown/markdown_render_gate.dart
-    package: "package:material_ui/material_ui.dart"
-    count: 1
-    owner: shared-widgets
-    reason: "Existing use awaiting migration to the platform UI seam"
-    removal: platform-ui-migration
   - path: lib/shared/widgets/markdown/renderer/block_renderer.dart
     package: "package:cupertino_ui/cupertino_ui.dart"
     count: 1
