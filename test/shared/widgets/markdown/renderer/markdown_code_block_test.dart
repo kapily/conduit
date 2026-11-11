@@ -443,6 +443,7 @@ void main() {
           }
         }
         expect(flashed, isTrue);
+        await tester.pump(HorizontalOverflowFade.scrollIndicatorLinger);
         await tester.pumpAndSettle();
         expect(fadeState(tester).scrollIndicatorOpacity, 0);
         expect(overflowFade(), isNot(paints..rrect()));
@@ -466,6 +467,7 @@ void main() {
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 300));
         expect(fadeState(tester).scrollIndicatorOpacity, 1);
+        await tester.pump(HorizontalOverflowFade.scrollIndicatorLinger);
         await tester.pumpAndSettle();
         expect(fadeState(tester).scrollIndicatorOpacity, 0);
         expect(overflowFade(), isNot(paints..rrect()));
@@ -535,6 +537,7 @@ void main() {
         flashed = (fadeState(tester).scrollIndicatorOpacity as double) >= 1;
       }
       expect(flashed, isTrue);
+      await tester.pump(HorizontalOverflowFade.scrollIndicatorLinger);
       await tester.pumpAndSettle();
       expect(fadeState(tester).scrollIndicatorOpacity, 0);
 

@@ -502,8 +502,10 @@ void main() {
         chrome(),
         paints..rect(rect: headerBand, color: style.tableHeaderBackground),
       );
-      // The indicator flashed when the table appeared and has faded since;
-      // it runs in its own track below the last row.
+      // The indicator rests without frames while lingering, then fades.
+      await tester.pump(HorizontalOverflowFade.scrollIndicatorLinger);
+      await tester.pumpAndSettle();
+      // It runs in its own track below the last row.
       expect(indicator(), isNot(paints..rrect(color: indicatorColor())));
       final lastRowBottom = renderTable.getRowBox(renderTable.rows - 1).bottom;
       expect(
@@ -532,6 +534,8 @@ void main() {
       // Shown while the table moves.
       expect(indicator(), paints..rrect(color: indicatorColor()));
       await gesture.up();
+      await tester.pumpAndSettle();
+      await tester.pump(HorizontalOverflowFade.scrollIndicatorLinger);
       await tester.pumpAndSettle();
       expect((fade.edges as HorizontalFadeEdges).right, 0);
       expect((fade.edges as HorizontalFadeEdges).left, 1);

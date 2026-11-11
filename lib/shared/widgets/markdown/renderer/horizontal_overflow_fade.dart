@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
@@ -116,7 +117,8 @@ class _HorizontalOverflowFadeState extends State<HorizontalOverflowFade>
     HorizontalFadeEdges.none,
   );
   late final AnimationController _indicator;
-  late final Animation<double> _indicatorOpacity;
+  late final CurvedAnimation _indicatorOpacity;
+  Timer? _indicatorDismissTimer;
   bool _overflows = false;
   bool _hasFlashed = false;
 
@@ -128,44 +130,18 @@ class _HorizontalOverflowFadeState extends State<HorizontalOverflowFade>
   @visibleForTesting
   double get scrollIndicatorOpacity => _indicatorOpacity.value;
 
-  static final int _fadeInMs =
-      HorizontalOverflowFade.scrollIndicatorFadeIn.inMilliseconds;
-  static final int _lingerMs =
-      HorizontalOverflowFade.scrollIndicatorLinger.inMilliseconds;
-  static final int _fadeOutMs =
-      HorizontalOverflowFade.scrollIndicatorFadeOut.inMilliseconds;
-  static final int _totalMs = _fadeInMs + _lingerMs + _fadeOutMs;
-
-  /// Controller value at which the indicator is fully shown and lingering.
-  static final double _shownValue = _fadeInMs / _totalMs;
-
   @override
   void initState() {
     super.initState();
-    // One timeline per appearance: fade in, linger, fade out. Scrolling holds
-    // it at the start of the linger; letting go plays the rest.
     _indicator = AnimationController(
       vsync: this,
-      duration: Duration(milliseconds: _totalMs),
+      duration: HorizontalOverflowFade.scrollIndicatorFadeIn,
+      reverseDuration: HorizontalOverflowFade.scrollIndicatorFadeOut,
     );
-    _indicatorOpacity = _indicator.drive(
-      TweenSequence<double>([
-        TweenSequenceItem(
-          tween: Tween(begin: 0.0, end: 1.0),
-          weight: _fadeInMs.toDouble(),
-        ),
-        TweenSequenceItem(
-          tween: ConstantTween(1.0),
-          weight: _lingerMs.toDouble(),
-        ),
-        TweenSequenceItem(
-          tween: Tween(
-            begin: 1.0,
-            end: 0.0,
-          ).chain(CurveTween(curve: Curves.easeOut)),
-          weight: _fadeOutMs.toDouble(),
-        ),
-      ]),
+    _indicatorOpacity = CurvedAnimation(
+      parent: _indicator,
+      curve: Curves.linear,
+      reverseCurve: Curves.easeOut.flipped,
     );
     _controller.addListener(_updateEdges);
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -177,6 +153,8 @@ class _HorizontalOverflowFadeState extends State<HorizontalOverflowFade>
   void dispose() {
     _controller.removeListener(_updateEdges);
     _controller.dispose();
+    _indicatorDismissTimer?.cancel();
+    _indicatorOpacity.dispose();
     _indicator.dispose();
     _edges.dispose();
     super.dispose();
@@ -296,6 +274,21 @@ class _HorizontalOverflowFadeState extends State<HorizontalOverflowFade>
   void _flashIndicator() {
     if (widget.scrollIndicatorColor == null) return;
     _indicator.forward(from: 0);
+    _scheduleIndicatorDismiss();
+  }
+
+  void _scheduleIndicatorDismiss() {
+    _indicatorDismissTimer?.cancel();
+    // Hold a static indicator without ticking or repainting its content.
+    // Finish any fade-in before starting the full linger interval.
+    _indicatorDismissTimer = Timer(
+      HorizontalOverflowFade.scrollIndicatorFadeIn * (1 - _indicator.value) +
+          HorizontalOverflowFade.scrollIndicatorLinger,
+      () {
+        _indicatorDismissTimer = null;
+        _indicator.reverse();
+      },
+    );
   }
 
   bool _handleScrollNotification(ScrollNotification notification) {
@@ -306,19 +299,17 @@ class _HorizontalOverflowFadeState extends State<HorizontalOverflowFade>
       return false;
     }
     if (notification is ScrollEndNotification) {
-      // Linger, then fade out.
-      _indicator.forward();
+      _scheduleIndicatorDismiss();
     } else if (notification is ScrollStartNotification ||
         notification is ScrollUpdateNotification ||
         notification is OverscrollNotification) {
       // Shown, without fading, for as long as the content moves.
-      if (_indicator.value >= _shownValue) {
-        _indicator.value = _shownValue;
-      } else if (!_indicator.isAnimating) {
-        _indicator.animateTo(
-          _shownValue,
-          duration: HorizontalOverflowFade.scrollIndicatorFadeIn,
-        );
+      _indicatorDismissTimer?.cancel();
+      _indicatorDismissTimer = null;
+      if (_indicator.status == AnimationStatus.reverse) {
+        _indicator.value = 1;
+      } else if (_indicator.value < 1 && !_indicator.isAnimating) {
+        _indicator.forward();
       }
     }
     return false;
