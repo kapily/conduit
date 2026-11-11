@@ -119,6 +119,7 @@ class _HorizontalOverflowFadeState extends State<HorizontalOverflowFade>
   late final AnimationController _indicator;
   late final CurvedAnimation _indicatorOpacity;
   Timer? _indicatorDismissTimer;
+  bool _indicatorHasStarted = false;
   bool _overflows = false;
   bool _hasFlashed = false;
 
@@ -273,6 +274,7 @@ class _HorizontalOverflowFadeState extends State<HorizontalOverflowFade>
 
   void _flashIndicator() {
     if (widget.scrollIndicatorColor == null) return;
+    _indicatorHasStarted = true;
     _indicator.forward(from: 0);
     _scheduleIndicatorDismiss();
   }
@@ -306,9 +308,10 @@ class _HorizontalOverflowFadeState extends State<HorizontalOverflowFade>
       // Shown, without fading, for as long as the content moves.
       _indicatorDismissTimer?.cancel();
       _indicatorDismissTimer = null;
-      if (_indicator.status == AnimationStatus.reverse) {
+      if (_indicatorHasStarted && !_indicator.status.isForwardOrCompleted) {
         _indicator.value = 1;
       } else if (_indicator.value < 1 && !_indicator.isAnimating) {
+        _indicatorHasStarted = true;
         _indicator.forward();
       }
     }

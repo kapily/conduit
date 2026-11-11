@@ -89,4 +89,22 @@ void main() {
     expect(tester.takeException(), isNull);
     expect(tester.binding.hasScheduledFrame, isFalse);
   });
+
+  testWidgets('dragging after dismissal restores the indicator immediately', (
+    tester,
+  ) async {
+    await pumpOverflow(tester);
+    await tester.pump(HorizontalOverflowFade.scrollIndicatorLinger);
+    await tester.pumpAndSettle();
+    expect(opacity(tester), 0);
+
+    final gesture = await tester.startGesture(
+      tester.getCenter(find.byType(HorizontalOverflowFade)),
+    );
+    await gesture.moveBy(const Offset(-60, 0));
+    await tester.pump();
+    expect(opacity(tester), 1);
+    await gesture.up();
+    await tester.pumpWidget(const SizedBox());
+  });
 }
