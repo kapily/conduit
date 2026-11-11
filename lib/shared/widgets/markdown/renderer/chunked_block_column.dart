@@ -24,7 +24,7 @@ class ChunkedBlockColumn extends StatefulWidget {
     required this.children,
     this.revealImmediately = false,
     this.initialChunk = 48,
-    this.chunkSize = 96,
+    this.chunkSize = 80,
     super.key,
   });
 
@@ -98,7 +98,10 @@ class _ChunkedBlockColumnState extends State<ChunkedBlockColumn> {
           keys.add(key);
           return KeyedSubtree(
             key: _childKeys.putIfAbsent(key, GlobalKey.new),
-            child: child,
+            // Replace plain identity wrappers instead of adding another element.
+            child: child.runtimeType == KeyedSubtree
+                ? (child as KeyedSubtree).child
+                : child,
           );
         })
         .toList(growable: false);
