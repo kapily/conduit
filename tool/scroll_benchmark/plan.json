@@ -1,0 +1,34 @@
+{
+  "baseline": "ca9eda3a5ea6e667c4e7124118f41b13928dc28c",
+  "candidate": "59c80a97cab7e1245dbebd73ef1524dbe0d2a6c7",
+  "flutter": "3.50.0",
+  "order": [
+    "a1",
+    "b1",
+    "b2",
+    "a2",
+    "a3",
+    "b3"
+  ],
+  "phases": [
+    {
+      "fixture": "indicators",
+      "gestures": 12
+    },
+    {
+      "fixture": "mixed",
+      "gestures": 24
+    }
+  ],
+  "warmup": "One mixed 12-gesture run per build before the fixed cohort. Retain it separately.",
+  "openingSeconds": 8,
+  "steadyWindow": "200ms after finger-down through 200ms before finger-up; exclude idle gaps.",
+  "percentiles": "Nearest rank; p50, p95, p99, p99.9 and maximum.",
+  "memoryScope": "VmHWM is process high-water RSS through the end of the phase, including startup and opening. Retained RSS/heap follow two GCs outside the measured interval.",
+  "stoppingRule": "Exactly three qualification runs per build and fixture. Preserve every run and outlier. Stop on invalid input or process failure; do not extend the cohort to obtain a passing result.",
+  "publicationGate": "Only create a feature PR with demonstrated correctness/performance gains and no measured regression, including tail latency.",
+  "environment": "Fresh GitHub-hosted Ubuntu x64 VM, Android 35 x86_64 emulator, 1080x2400 at 440dpi, 2GB guest RAM, two vCPUs, SwiftShader GLES, 60Hz. Emulator results do not establish physical-phone performance.",
+  "controls": "Same SDK, lock resolution, fixture, emulator and input for both builds. Build and test before booting the emulator. No tracing, CPU profiler, recording or compilation during the timed phases.",
+  "data": "Only freshly invented shapes and tiles. No account exports, private chats or instance data.",
+  "status": "Prepared before any remote measurements"
+}
