@@ -21,20 +21,28 @@ SDK = Path(os.environ["ANDROID_HOME"])
 PACKAGE = "app.cogwheel.conduit"
 
 
-def adb(*args, check=True):
-    return subprocess.run(
+def adb(*args, check=True, include_stderr=False):
+    result = subprocess.run(
         [str(SDK / "platform-tools/adb"), "-s", "emulator-5554", *map(str, args)],
         check=check,
         capture_output=True,
         timeout=40,
-    ).stdout
+    )
+    return result.stdout + (result.stderr if include_stderr else b"")
 
 
 def nodes():
-    adb("shell", "uiautomator", "dump", "/sdcard/scroll-benchmark-ui.xml")
-    raw = adb("exec-out", "cat", "/sdcard/scroll-benchmark-ui.xml")
+    path = "/sdcard/scroll-benchmark-ui.xml"
+    adb("shell", "rm", "-f", path)
+    result = adb("shell", "uiautomator", "dump", path, check=False, include_stderr=True)
+    (OUT / "uiautomator.txt").write_bytes(result)
+    raw = adb("exec-out", "cat", path, check=False)
+    try:
+        items = list(ET.fromstring(raw).iter("node"))
+    except ET.ParseError as error:
+        raise RuntimeError("UI hierarchy unavailable; see uiautomator.txt") from error
     (OUT / "latest-ui.xml").write_bytes(raw)
-    return list(ET.fromstring(raw).iter("node"))
+    return items
 
 
 def label(node):
@@ -338,4 +346,8 @@ if __name__ == "__main__":
         (OUT / "failure.png").write_bytes(
             adb("exec-out", "screencap", "-p", check=False)
         )
+        # Only a disposable synthetic device is used. Keep startup errors, not
+        # the unfiltered log containing ephemeral VM-service credentials.
+        logs = adb("logcat", "-d", "-s", "flutter:E", "libc:F", check=False)
+        (OUT / "runtime-errors.txt").write_bytes(logs)
         raise

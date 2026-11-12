@@ -28,7 +28,7 @@
   "stoppingRule": "Exactly three qualification runs per build and fixture. Preserve every run and outlier. Stop on invalid input or process failure; do not extend the cohort to obtain a passing result.",
   "publicationGate": "Only create a feature PR with demonstrated correctness/performance gains and no measured regression, including tail latency.",
   "environment": "Fresh GitHub-hosted Ubuntu x64 VM, Android 35 x86_64 emulator, 1080x2400 at 440dpi, 2GB guest RAM, two vCPUs, SwiftShader GLES, 60Hz. Emulator results do not establish physical-phone performance.",
-  "controls": "Same SDK, lock resolution, fixture, emulator and input for both builds. Build and test before booting the emulator. No tracing, CPU profiler, recording or compilation during the timed phases.",
+  "controls": "Same SDK, lock resolution, fixture, emulator and input for both builds. Clean build products between revisions; use two fixed packaging passes for each and audit both packages. Require matching payload membership and Flutter engine, present x64 AOT libraries and distinct app binaries. Build and test before booting the emulator. No tracing, CPU profiler, recording or compilation during the timed phases.",
   "data": "Only freshly invented shapes and tiles. No account exports, private chats or instance data.",
   "status": "Prepared before any remote measurements"
 }
