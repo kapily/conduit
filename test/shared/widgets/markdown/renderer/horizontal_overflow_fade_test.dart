@@ -2,26 +2,28 @@ import 'package:conduit/shared/widgets/markdown/renderer/horizontal_overflow_fad
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-Future<void> pumpOverflow(WidgetTester tester) async {
-  await tester.pumpWidget(
-    Directionality(
-      textDirection: TextDirection.ltr,
-      child: Center(
-        child: SizedBox(
-          width: 200,
-          height: 80,
-          child: HorizontalOverflowFade(
-            scrollIndicatorColor: const Color(0xFF336699),
-            builder: (context, controller) => SingleChildScrollView(
-              controller: controller,
-              scrollDirection: Axis.horizontal,
-              child: const SizedBox(width: 600, height: 80),
-            ),
+Future<void> pumpOverflow(
+  WidgetTester tester, {
+  Widget Function(Widget)? wrap,
+}) async {
+  final content = Directionality(
+    textDirection: TextDirection.ltr,
+    child: Center(
+      child: SizedBox(
+        width: 200,
+        height: 80,
+        child: HorizontalOverflowFade(
+          scrollIndicatorColor: const Color(0xFF336699),
+          builder: (context, controller) => SingleChildScrollView(
+            controller: controller,
+            scrollDirection: Axis.horizontal,
+            child: const SizedBox(width: 600, height: 80),
           ),
         ),
       ),
     ),
   );
+  await tester.pumpWidget(wrap?.call(content) ?? content);
   await tester.pump();
   await tester.pump(HorizontalOverflowFade.scrollIndicatorFadeIn);
   // An animation completes on the first tick beyond its duration.
@@ -105,6 +107,52 @@ void main() {
     await tester.pump();
     expect(opacity(tester), 1);
     await gesture.up();
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('an expired indicator stays hidden when its tab resumes', (
+    tester,
+  ) async {
+    final active = ValueNotifier(true);
+    addTearDown(active.dispose);
+    await pumpOverflow(
+      tester,
+      wrap: (child) => ValueListenableBuilder<bool>(
+        valueListenable: active,
+        builder: (context, enabled, child) => TickerMode(
+          enabled: enabled,
+          child: Opacity(opacity: enabled ? 1 : 0, child: child),
+        ),
+        child: child,
+      ),
+    );
+    active.value = false;
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 2));
+    active.value = true;
+    await tester.pump();
+    await tester.pump();
+    expect(opacity(tester), 0);
+    expect(tester.binding.hasScheduledFrame, isFalse);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('an expired indicator stays hidden when the app resumes', (
+    tester,
+  ) async {
+    addTearDown(
+      () => tester.binding.handleAppLifecycleStateChanged(
+        AppLifecycleState.resumed,
+      ),
+    );
+    await pumpOverflow(tester);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    await tester.pump(const Duration(seconds: 2));
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump();
+    await tester.pump();
+    expect(opacity(tester), 0);
+    expect(tester.binding.hasScheduledFrame, isFalse);
     await tester.pumpWidget(const SizedBox());
   });
 }

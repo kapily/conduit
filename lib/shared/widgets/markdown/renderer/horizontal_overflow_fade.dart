@@ -288,7 +288,12 @@ class _HorizontalOverflowFadeState extends State<HorizontalOverflowFade>
           HorizontalOverflowFade.scrollIndicatorLinger,
       () {
         _indicatorDismissTimer = null;
-        _indicator.reverse();
+        if (TickerMode.valuesOf(context).enabled &&
+            SchedulerBinding.instance.framesEnabled) {
+          _indicator.reverse();
+        } else {
+          _indicator.value = 0;
+        }
       },
     );
   }
