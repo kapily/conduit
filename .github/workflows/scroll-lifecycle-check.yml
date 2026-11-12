@@ -1,0 +1,80 @@
+name: Indicator lifecycle regression check
+
+on:
+  push:
+    branches: [codex/scroll-benchmark-ci]
+    paths:
+      - .github/workflows/scroll-lifecycle-check.yml
+      - tool/scroll_lifecycle_check/**
+
+permissions:
+  contents: read
+
+jobs:
+  reproduce:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        flutter: ['3.47.9', '3.50.0']
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          path: driver
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          path: app
+          ref: 59c80a97cab7e1245dbebd73ef1524dbe0d2a6c7
+          persist-credentials: false
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: ${{ matrix.flutter }}
+          channel: stable
+          cache: true
+      - name: Prepare generated sources
+        working-directory: app
+        run: |
+          git submodule update --init --depth 1 third_party/katex third_party/mermaid
+          flutter pub get
+          dart run build_runner build
+          (cd packages/conduit_core && dart run build_runner build)
+      - name: Verify upstream, reproduce regression, and test the minimal fix
+        working-directory: app
+        run: |
+          result="$RUNNER_TEMP/lifecycle-results"
+          mkdir -p "$result"
+          source_file=lib/shared/widgets/markdown/renderer/horizontal_overflow_fade.dart
+          test_file=test/shared/widgets/markdown/renderer/idle_indicator_lifecycle_test.dart
+          cp ../driver/tool/scroll_lifecycle_check/idle_indicator_lifecycle_test.dart "$test_file"
+          cp "$source_file" "$RUNNER_TEMP/indicator-candidate.dart"
+          git fetch --depth=1 origin ca9eda3a5ea6e667c4e7124118f41b13928dc28c
+          git show ca9eda3a5ea6e667c4e7124118f41b13928dc28c:"$source_file" > "$source_file"
+          flutter test --no-pub --concurrency=1 "$test_file" > "$result/upstream.log" 2>&1
+          cp "$RUNNER_TEMP/indicator-candidate.dart" "$source_file"
+          if flutter test --no-pub --concurrency=1 "$test_file" > "$result/before.log" 2>&1; then
+            echo 'The suspected regression did not reproduce.'
+            exit 1
+          fi
+          grep -q 'Expected: <0>' "$result/before.log"
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('lib/shared/widgets/markdown/renderer/horizontal_overflow_fade.dart')
+          text = p.read_text()
+          old = 'TickerMode.valuesOf(context).enabled'
+          assert text.count(old) == 1
+          p.write_text(text.replace(old, 'TickerMode.getValuesNotifier(context).value.enabled'))
+          PY
+          flutter test --no-pub --concurrency=1 test/shared/widgets/markdown/renderer > "$result/after.log" 2>&1
+          dart analyze "$source_file" "$test_file" > "$result/analysis.log" 2>&1
+          git diff --check
+          git diff -- "$source_file" > "$result/change.diff"
+      - name: Preserve synthetic test evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: indicator-lifecycle-${{ matrix.flutter }}
+          path: ${{ runner.temp }}/lifecycle-results/
+          if-no-files-found: warn
+          retention-days: 30
