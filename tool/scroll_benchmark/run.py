@@ -305,7 +305,9 @@ def main():
                 if current != build:
                     install(build, manifest)
                     current = build
-                trial("warmup-" + build + "-mixed", "mixed", 12)
+                for phase in plan["phases"]:
+                    kind = phase["fixture"]
+                    trial("warmup-" + build + "-" + kind, kind, 12)
             plan["status"] = "Running fixed qualification cohort"
             (OUT / "plan.json").write_text(json.dumps(plan, indent=2) + "\n")
             for label_name in plan["order"]:

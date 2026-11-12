@@ -20,7 +20,7 @@
       "gestures": 24
     }
   ],
-  "warmup": "One mixed 12-gesture run per build before the fixed cohort. Retain it separately.",
+  "warmup": "One 12-gesture run for each fixture and each build before the fixed cohort, so both transcripts are cached. Retain every warmup separately.",
   "openingSeconds": 8,
   "steadyWindow": "200ms after finger-down through 200ms before finger-up; exclude idle gaps.",
   "percentiles": "Nearest rank; p50, p95, p99, p99.9 and maximum.",
