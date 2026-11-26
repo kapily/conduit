@@ -54,6 +54,13 @@ appId: app.cogwheel.conduit.debug
 - extendedWaitUntil:
     visible: "(?s).*Message or run a task.*"
     timeout: 45000
+- tapOn: "(?s).*Message or run a task.*"
+- inputText: "Which marker belongs in the arugula tray?"
+- tapOn: "Send message"
+- extendedWaitUntil:
+    visible: "(?s).*Put the copper marker in the arugula tray.*"
+    timeout: 45000
+- waitForAnimationToEnd
 - takeScreenshot: workspace
 - tapOn: Back
 - extendedWaitUntil:

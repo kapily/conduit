@@ -33,7 +33,15 @@ class Endpoint(BaseHTTPRequestHandler):
         prompts=[m.get('content','') for m in body.get('messages',[]) if m.get('role')=='user']
         text=json.dumps(prompts[-1:]).lower()
         system=' '.join(str(m.get('content','')) for m in body.get('messages',[]) if m.get('role')=='system').lower()
-        answer=ANSWERS['title' if 'title' in text or (not body.get('tools') and ('title' in system or 'summar' in system)) else 'ping' if 'ping' in text else 'checklist' if any(t in text for t in ('checklist','steps','list','next','tomorrow')) else 'default']
+        needs_title='title' in text or (not body.get('tools') and ('title' in system or 'summar' in system))
+        if needs_title:
+            answer='Arugula tray' if 'arugula' in text or 'arugula' in system else ANSWERS['title']
+        elif 'arugula' in text:
+            answer='Put the copper marker in the arugula tray.'
+        elif 'ping' in text:
+            answer=ANSWERS['ping']
+        else:
+            answer=ANSWERS['checklist']
         self.send_response(200)
         stream=bool(body.get('stream'))
         self.send_header('Content-Type','text/event-stream' if stream else 'application/json')

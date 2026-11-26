@@ -31,7 +31,7 @@ for fname in ['chooser.png','pairing.png','transcript.png','workspace.png','gard
  if fname.endswith('.mp4'):
   run(['ffmpeg','-hide_banner','-loglevel','error','-i',str(matches[0]),'-map','0:v:0','-an','-map_metadata','-1','-vf','scale=720:-2','-c:v','libx264','-crf','23','-preset','fast','-pix_fmt','yuv420p','-movflags','+faststart',str(dest/name)])
  else:shutil.copyfile(matches[0],dest/name)
-(dest/'verification.json').write_text(json.dumps({'platform':plat,'conduit_source':os.environ['QA_COMMIT'],'harness':'0.2.2-rc.5','ui_automation':'2.12.1','native_chat':'sent and reopened after a cold launch','official_workspace':'opened and returned to native chats','manual_privacy_review':'pending'},indent=2))
+(dest/'verification.json').write_text(json.dumps({'platform':plat,'conduit_source':os.environ['QA_COMMIT'],'harness':'0.2.2-rc.5','ui_automation':'2.12.1','native_chat':'sent and reopened after a cold launch','official_workspace':'sent a separate prompt, verified its unique streamed reply, and returned to native chats','manual_privacy_review':'pending'},indent=2))
 archive=stage/'unpublished.tar'
 with tarfile.open(archive,'w',format=tarfile.USTAR_FORMAT) as t:
  for f in sorted(dest.iterdir()):
