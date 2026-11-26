@@ -12,7 +12,7 @@ case "$1" in
     python3 ../tooling/qa/ort_cache.py restore ../tooling/inputs/ort-1.22.0.tgz "$CP_CACHE_DIR"
   fi
   flutter build ios --simulator --debug --no-pub > "$stage/build.log" 2>&1 || { echo 'iOS build failed. Check the locked CocoaPods and Swift package dependencies.'; exit 1; }
-  rt=$(xcrun simctl list runtimes -j | python3 -c 'import json,sys;print(next(r["identifier"] for r in json.load(sys.stdin)["runtimes"] if r.get("isAvailable") and r["identifier"].startswith("com.apple.CoreSimulator.SimRuntime.iOS-27-")))')
+  rt=$(xcrun simctl list runtimes -j | python3 -c 'import json,sys;available=[r for r in json.load(sys.stdin)["runtimes"] if r.get("isAvailable") and r["identifier"].startswith("com.apple.CoreSimulator.SimRuntime.iOS-") and r["version"].split(".")[0] in ("26","27")];print(max(available,key=lambda r:tuple(map(int,r["version"].split("."))))["identifier"])')
   uid=$(xcrun simctl create 'Garden QA' com.apple.CoreSimulator.SimDeviceType.iPhone-17 "$rt")
   xcrun simctl boot "$uid";xcrun simctl bootstatus "$uid" -b
   xcrun simctl status_bar "$uid" override --time 9:41 --batteryState charged --batteryLevel 100 --cellularBars 4 --wifiBars 3

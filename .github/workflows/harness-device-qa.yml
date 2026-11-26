@@ -21,6 +21,7 @@ jobs:
       fail-fast: false
       matrix: >-
         ${{ fromJSON(
+          contains(github.event.head_commit.message, '[qa-ios26]') && '{"include":[{"platform":"ios","runner":"macos-26"}]}' ||
           contains(github.event.head_commit.message, '[qa-ios]') && '{"include":[{"platform":"ios","runner":"xcode-27"}]}' ||
           contains(github.event.head_commit.message, '[qa-android]') && '{"include":[{"platform":"android","runner":"ubuntu-24.04"}]}' ||
           '{"include":[{"platform":"ios","runner":"xcode-27"},{"platform":"android","runner":"ubuntu-24.04"}]}'

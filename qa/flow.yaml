@@ -33,7 +33,7 @@ appId: app.cogwheel.conduit.debug
 - inputText: "Give me a checklist for a tray of basil seedlings."
 - tapOn: "Send"
 - extendedWaitUntil:
-    visible: ".*Label each pot.*"
+    visible: "(?s).*Check the soil again tomorrow.*"
     timeout: 45000
 - waitForAnimationToEnd
 - takeScreenshot: transcript
@@ -45,7 +45,7 @@ appId: app.cogwheel.conduit.debug
     text: "(?is).*(Seedling notes|Give me a checklist|Label each pot).*"
     index: 0
 - assertVisible: "(?s).*Give me a checklist for a tray of basil seedlings.*"
-- assertVisible: "(?s).*Label each pot.*"
+- assertVisible: "(?s).*Check the soil again tomorrow.*"
 - tapOn: "Chats"
 - tapOn: "Open Harness workspace"
 - tapOn:
@@ -69,4 +69,4 @@ appId: app.cogwheel.conduit.debug
     text: "(?is).*(Seedling notes|Give me a checklist|Label each pot).*"
     index: 0
 - assertVisible: "(?s).*Give me a checklist for a tray of basil seedlings.*"
-- assertVisible: "(?s).*Label each pot.*"
+- assertVisible: "(?s).*Check the soil again tomorrow.*"
