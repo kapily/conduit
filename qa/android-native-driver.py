@@ -342,6 +342,66 @@ def web_proof(p):
     def dismiss(ui):
         control=scene(ui)
         if control:p.tap(control)
+    def history(timeout=38):
+        required=(QUESTION,'Label each pot.','Water the seedlings.',ANSWER)
+        seen=set()
+        def report(mark):
+            if mark not in seen:
+                seen.add(mark)
+                print('Official workspace: '+mark+'.',flush=True)
+        def control(notes,predicate):
+            candidates=[n for n in notes if n.enabled and predicate(n)]
+            return min(candidates,key=lambda n:(n.box[2]-n.box[0])*(n.box[3]-n.box[1]),default=None)
+        deadline=time.monotonic()+timeout
+        last_action=''
+        action_at=0
+        row_opened=False
+        while time.monotonic()<deadline:
+            ui=p.items()
+            notes=[n for n in ui if n.web]
+            if notes:
+                report('embedded WebView visible')
+            flags=[any(not n.edit and n.matches(re.escape(t)) for n in notes) for t in required]
+            if all(flags):
+                report('server question and all three reply lines visible')
+                return ui
+            action=''
+            target=control(notes,lambda n:n.exact('Continue','Allow','OK'))
+            if target:
+                action='continue onboarding'
+            elif not row_opened:
+                row=control(notes,lambda n:n.exact('Seedling notes'))
+                if row:
+                    target=row;action='open saved session'
+                else:
+                    target=control(notes,lambda n:n.exact('Collapse right sidebar'))
+                    if target:action='close right panel'
+                    else:
+                        target=control(notes,lambda n:n.exact('Open sidebar','Expand sidebar','Expand left sidebar','Open left sidebar'))
+                        if target:action='open session sidebar'
+                        else:
+                            target=control(notes,lambda n:n.exact('Seedling notebook'))
+                            if target:action='expand workspace group'
+            else:
+                target=control(notes,lambda n:n.exact('Close sidebar','Collapse sidebar','Collapse left sidebar'))
+                if target:action='close session sidebar'
+            if not notes and not target:
+                if any(n.matches('Welcome to Conduit') for n in ui):
+                    target=control(ui,lambda n:n.matches('^DeepSeek Harness'))
+                    action='return to registered backend'
+                else:
+                    target=control(ui,lambda n:n.exact(OPEN_WORKSPACE))
+                    action='reenter embedded workspace'
+            now=time.monotonic()
+            if target and (action!=last_action or now-action_at>5):
+                report(action)
+                p.tap(target)
+                row_opened=row_opened or action=='open saved session'
+                last_action=action;action_at=now
+            time.sleep(.4)
+        return None
+    ui=history(34)
+    if ui:return 'read-native-history',ui
     def stable(label, pred, timeout, permitted=lambda ui:True):
         before=None
         until=time.monotonic()+timeout
@@ -371,33 +431,14 @@ def web_proof(p):
                 break
             except CheckFailed:
                 if attempt:raise
-        p.hide()
         send=stable('submission',lambda n:n.web and n.exact('Send message'),12,permitted=draft)
         p.tap(send)
         wait(p,'official web reply',lambda n:n.web and n.matches(re.escape(WEB_ANSWER)),timeout=28,optional=dismiss)
-        p.hide()
         _,ui=wait(p,'official web reply preview',lambda n:n.web and n.matches(re.escape(WEB_ANSWER)))
         return 'sent-second-prompt',ui
     except CheckFailed:
-        # Reopen the known server-backed session in the separate official workspace.
-        # Both text fragments must be simultaneously visible in the web transcript.
-        p.hide()
-        def sidebar(ui):
-            if scene(ui):dismiss(ui);return
-            toggle=next((n for n in ui if n.web and n.enabled and n.exact('Open sidebar','Expand sidebar','Expand left sidebar','Open left sidebar')),None)
-            if toggle:p.tap(toggle)
-        row,_=wait(p,'official server history row',lambda n:n.web and n.exact('Seedling notes'),timeout=28,optional=sidebar)
-        p.tap(row)
-        until=time.monotonic()+24
-        while time.monotonic()<until:
-            ui=p.items()
-            overlay=scene(ui)
-            if overlay:p.tap(overlay);continue
-            if all(any(n.web and not n.edit and n.matches(re.escape(t)) for n in ui) for t in (QUESTION,ANSWER)):
-                return 'read-native-history',ui
-            left=next((n for n in ui if n.web and n.enabled and n.exact('Close sidebar','Collapse sidebar','Collapse left sidebar')),None)
-            if left:p.tap(left)
-            time.sleep(.35)
+        ui=history(32)
+        if ui:return 'read-native-history',ui
         raise CheckFailed('The official workspace could not verify the original question and reply.')
 
 
