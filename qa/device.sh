@@ -28,8 +28,13 @@ case "$1" in
     done
   fi
   test -c /dev/kvm; sudo setfacl -m "u:$(id -un):rw" /dev/kvm
-  sdkmanager 'system-images;android-35;google_apis;x86_64' 'emulator' > "$stage/sdk.log"
-  echo no | avdmanager create avd -n GardenQA -k 'system-images;android-35;google_apis;x86_64' --device pixel_7 > "$stage/avd.log"
+  sdk_tools="$ANDROID_HOME/cmdline-tools/latest/bin"
+  if [[ ! -x "$sdk_tools/sdkmanager" ]]; then
+    sdk_tools=$(dirname "$(find "$ANDROID_HOME/cmdline-tools" -path '*/bin/sdkmanager' -type f -print -quit)")
+  fi
+  test -x "$sdk_tools/sdkmanager" && test -x "$sdk_tools/avdmanager"
+  "$sdk_tools/sdkmanager" 'system-images;android-35;google_apis;x86_64' emulator > "$stage/sdk.log"
+  echo no | "$sdk_tools/avdmanager" create avd -n GardenQA -k 'system-images;android-35;google_apis;x86_64' --device pixel_7 > "$stage/avd.log"
   # Conduit ships ARM ABIs; its split build honors the explicit x86_64 target for this emulator.
   flutter build apk --debug --split-per-abi --target-platform android-x64 --no-pub > "$stage/build.log" 2>&1 || { echo 'Android x86_64 debug build failed.'; exit 1; }
   apk=$(find build/app/outputs/flutter-apk -name '*x86_64*debug*.apk' -print -quit)
