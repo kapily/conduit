@@ -140,9 +140,17 @@ jobs:
           path: ${{ runner.temp }}/ios-first-screen.p7m
           if-no-files-found: error
           retention-days: 2
-      - name: Verify Android foreground and first-run controls with fixed labels
+      - name: Capture clean Android launch before any fixture credential exists
         if: matrix.platform == 'android'
-        run: python3 tooling/qa/phone-status.py android initial
+        run: python3 tooling/qa/capture-initial-android.py
+      - name: Stage the encrypted first Android screen for offline inspection
+        if: matrix.platform == 'android'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: android-first-screen
+          path: ${{ runner.temp }}/android-first-screen.p7m
+          if-no-files-found: error
+          retention-days: 2
       - name: Start synthetic Harness and local model
         run: python3 tooling/qa/fixture.py
       - name: Exercise native and web workspaces, then seal verified media

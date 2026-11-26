@@ -143,8 +143,11 @@ class Phone:
             tree = self.path + '-ui.xml'
             cmd = (f'umask 077; rm -f {tree}; uiautomator dump {tree} >/dev/null 2>&1 '
                    f'&& cat {tree}; rm -f {tree}')
-            result = parse(self.call('exec-out', cmd, timeout=18))
+            raw = self.call('exec-out', cmd, timeout=18)
+            self.last_hierarchy = b'</hierarchy>' in raw
+            result = parse(raw)
         except CheckFailed:
+            self.last_hierarchy = False
             result = []
         self.last = result
         permission = [n for n in result if n.package != APP]
@@ -180,13 +183,61 @@ class Phone:
         if re.search(r'(?:mInputShown|isInputViewShown|mIsInputViewShown)=true', self.shell('dumpsys','input_method')):
             self.shell('input','keyevent','4')
 
+    def foreground(self):
+        windows=self.shell('dumpsys','window','windows',timeout=7)
+        current=next((line for line in windows.splitlines() if 'mCurrentFocus=' in line),'')
+        for package,name in ((APP,'conduit'),('com.android.systemui','system-ui'),
+                             ('com.google.android.apps.nexuslauncher','launcher'),('com.android.launcher','launcher'),
+                             ('com.google.android.permissioncontroller','permission'),('com.android.permissioncontroller','permission')):
+            if package in current:return name
+        return 'other' if current and 'null' not in current else 'unknown'
+
     def start(self, fresh=False):
+        # device.sh installs the exact APK once on a wiped and dedicated GardenQA.
+        # Preserve app storage across the probe, the cold-reopen check, and recovery.
+        self.shell('input','keyevent','KEYCODE_WAKEUP')
+        self.shell('wm','dismiss-keyguard')
+        self.shell('cmd','statusbar','collapse')
         if fresh:
-            if self.shell('pm','clear',APP).strip() != 'Success':
-                raise CheckFailed('Could not reset the newly provisioned test app.')
-        else:
-            self.shell('am','force-stop',APP)
-        self.shell('monkey','-p',APP,'-c','android.intent.category.LAUNCHER','1')
+            for setting in ('window_animation_scale','transition_animation_scale','animator_duration_scale'):
+                self.shell('settings','put','global',setting,'0')
+        self.shell('am','force-stop','--user','0',APP)
+        raw=self.shell('cmd','package','resolve-activity','--brief','--user','0','-a','android.intent.action.MAIN',
+                       '-c','android.intent.category.LAUNCHER','-p',APP)
+        component=next((v.strip() for v in raw.splitlines() if re.fullmatch(re.escape(APP)+r'/[A-Za-z_.$][A-Za-z0-9_.$]*',v.strip())),None)
+        if not component:
+            raise CheckFailed('The installed debug app did not resolve a launcher activity.')
+        self.launch_component=component
+        self.bring_forward()
+        if fresh:
+            self.last_recovery=time.monotonic()
+            self.recoveries=0
+
+    def bring_forward(self):
+        reply=self.shell('am','start','-W','--user','0','-a','android.intent.action.MAIN','-c',
+                         'android.intent.category.LAUNCHER','-n',self.launch_component,timeout=45)
+        if re.search(r'(?:^Error|^Exception|^Status: (?!ok))',reply,re.I|re.M):
+            raise CheckFailed('The resolved Conduit launcher did not start.')
+
+    def recover_chooser(self, ui):
+        if any(n.matches('Open WebUI|LibreChat|Hermes') for n in ui):
+            self.scroll()
+            return
+        now=time.monotonic()
+        if now-self.last_recovery<15 or self.recoveries>=2:
+            return
+        self.recoveries+=1
+        self.last_recovery=now
+        self.last_foreground=self.foreground()
+        self.shell('input','keyevent','KEYCODE_WAKEUP')
+        self.shell('wm','dismiss-keyguard')
+        self.shell('cmd','statusbar','collapse')
+        # A matched notification prompt is already handled by items(). Do not
+        # interact blindly with other controls. Recover the verified launcher.
+        if self.last_foreground!='permission':
+            if self.last_foreground=='conduit' and self.recoveries==2:
+                self.shell('am','force-stop','--user','0',APP)
+            self.bring_forward()
 
     def scroll(self):
         sizes = re.findall(r'(\d+)x(\d+)', self.shell('wm','size'))
@@ -249,7 +300,9 @@ class Phone:
         # Do not reveal captured hierarchy labels, screenshots, clipboard or token.
         known = ['Open WebUI','DeepSeek Harness','Server Address','Launch token','Connect',
                  'No conversations yet','New Chat','Chats',OPEN_WORKSPACE,'Send','Continue','Send message']
-        return {'phase':self.phase, 'app_nodes':len(self.last), 'web_nodes':sum(n.web for n in self.last),
+        return {'phase':self.phase, 'hierarchy_complete':getattr(self,'last_hierarchy',False),
+                'last_foreground':getattr(self,'last_foreground','unknown'),
+                'app_nodes':sum(n.package==APP for n in self.last), 'web_nodes':sum(n.web for n in self.last),
                 'secure_fields':sum(n.secure and n.edit for n in self.last),
                 'known_controls':[t for t in known if any(n.exact(t) for n in self.last)]}
 
@@ -354,7 +407,7 @@ def flow(p):
         if choice:p.tap(choice)
     p.start(fresh=True)
     chooser,ui=wait(p,'backend selection',lambda n:native(n) and n.matches('DeepSeek Harness'),
-                    optional=lambda u:p.scroll() if any(n.matches('Open WebUI|LibreChat') for n in u) else None)
+                    timeout=100,optional=p.recover_chooser)
     p.shot('chooser',ui);p.tap(chooser)
     p.phase='empty pairing form'
     address,ui=wait(p,'pairing address',lambda n:native(n) and n.edit and not n.secure)
