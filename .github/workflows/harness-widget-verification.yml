@@ -8,12 +8,12 @@ jobs:
   device:
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - platform: android
-            runner: ubuntu-24.04
-          - platform: ios
-            runner: macos-26
+      matrix: >-
+        ${{ fromJSON(
+          contains(github.event.head_commit.message, '[widget-android]') && '{"include":[{"platform":"android","runner":"ubuntu-24.04"}]}' ||
+          contains(github.event.head_commit.message, '[widget-ios]') && '{"include":[{"platform":"ios","runner":"macos-26"}]}' ||
+          '{"include":[{"platform":"android","runner":"ubuntu-24.04"},{"platform":"ios","runner":"macos-26"}]}'
+        ) }}
     name: Garden widgets on ${{ matrix.platform }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 85
@@ -73,6 +73,11 @@ jobs:
           python3 ../tooling/qa/ort_cache.py restore ../tooling/inputs/ort-1.22.0.tgz "$QA_STAGE/cocoapods-cache"
           echo "CP_CACHE_DIR=$QA_STAGE/cocoapods-cache" >> "$GITHUB_ENV"
           echo "XCODE_XCCONFIG_FILE=$PWD/ios/Flutter/ArmOnly.xcconfig" >> "$GITHUB_ENV"
+      - name: Align the Android test plugin to the production Android compiler
+        if: matrix.platform == 'android'
+        run: |
+          mkdir -p ~/.gradle/init.d
+          cp tooling/qa/widget-fallback/android-integration.gradle ~/.gradle/init.d/garden-integration.gradle
       - name: Boot the disposable verification device
         working-directory: conduit
         run: bash ../tooling/qa/device.sh boot "${{ matrix.platform }}"

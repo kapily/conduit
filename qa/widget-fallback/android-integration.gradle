@@ -1,0 +1,17 @@
+// The instrumented build uses the same Android Gradle plugin as the product project.
+gradle.beforeProject { project ->
+    if (project.name == 'integration_test') {
+        project.buildscript.configurations.configureEach {
+            resolutionStrategy.eachDependency { item ->
+                if (item.requested.group == 'com.android.tools.build' && item.requested.name == 'gradle') {
+                    item.useVersion('9.2.1')
+                }
+            }
+        }
+    }
+    project.buildscript.repositories.maven {
+        name = 'GardenCentralKotlin'
+        url = uri('https://maven-central.storage-download.googleapis.com/maven2')
+        content { includeGroupByRegex('org[.]jetbrains([.].*)?') }
+    }
+}

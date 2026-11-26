@@ -20,7 +20,7 @@ with TemporaryDirectory(dir=stage) as d:
     diagnostic=stage/'flutter-integration.private.log';excerpt=''
     if diagnostic.is_file():
         data=diagnostic.read_text(errors='replace')
-        allow=r'Error:|Exception:|Unable to|Failure|Failed to|doesn.t (?:define|support)|does not (?:exist|support)|Garden check did not reach|The argument type |Method not found|No named parameter|requires a higher|CocoaPods could not|BUILD FAILED|Gradle task.+failed|could not resolve|couldn.t resolve|failed to initialize|test failed|connection refused|Could not build|Unhandled exception'
+        allow=r'Error:|Exception:|Unable to|Failure|Failed to|doesn.t (?:define|support)|does not (?:exist|support)|Garden check did not reach|The argument type |Method not found|No named parameter|requires a higher|CocoaPods could not|BUILD FAILED|Gradle task.+failed|could not resolve|couldn.t resolve|failed to initialize|test failed|connection refused|Could not build|Unhandled exception|Could not (?:GET|HEAD|download)|status code|Read timed out|HTTP response|Resource missing|Too Many Requests|requires at least|minimum supported|Caused by:|A problem occurred (?:evaluating|configuring)'
         for line in data.splitlines():
             if re.search(allow,line,re.I) and not re.search(r'passw|cookie|bearer|launch.token|GARDEN_RUN|authorization|credential',line,re.I):
                 line=re.sub(r'(?:/Users/|/home/|/Volumes/|/private/|/var/)[^\s]+','<temporary-path>',line)
