@@ -8,10 +8,24 @@ import time
 spec=importlib.util.spec_from_file_location('installed_android',Path(__file__).resolve().parents[1]/'android-native-driver.py')
 d=importlib.util.module_from_spec(spec);sys.modules[spec.name]=d;spec.loader.exec_module(d)
 
+class WorkspacePhone(d.Phone):
+    def bring_forward(self):
+        # The app may already be initializing while a freshly booted host times
+        # out waiting for an Android launch measurement. Read the real chooser
+        # or restored workspace through accessibility to verify readiness.
+        reply=self.shell('am','start','--user','0','-a','android.intent.action.MAIN',
+                         '-c','android.intent.category.LAUNCHER','-n',self.launch_component,timeout=35)
+        if re.search(r'^Error|^Exception',reply,re.I|re.M):
+            # Some images pick a disabled alias on their first package scan.
+            # Ask Android's launcher to activate only the pinned app and wait
+            # for its own actual UI in the existing accessibility loop.
+            self.shell('monkey','-p',d.APP,'-c','android.intent.category.LAUNCHER','1',timeout=30)
+
+
 def main():
     os.umask(0o077)
     stage=Path(os.environ['QA_STAGE']).resolve()
-    phone=d.Phone(stage,os.environ['QA_DEVICE'])
+    phone=WorkspacePhone(stage,os.environ['QA_DEVICE'])
     phone.dest=stage/'workspace-evidence';phone.dest.mkdir(mode=0o700)
     def matches(s):
         return lambda n:not n.web and n.matches(r'(?:^|\n)'+re.escape(s)+r'(?:$|\n)')
