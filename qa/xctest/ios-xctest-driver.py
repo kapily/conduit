@@ -6,6 +6,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 import os
 from pathlib import Path
+from urllib.parse import urlencode
 import plistlib
 import re
 import secrets
@@ -27,6 +28,8 @@ class Scenario:
         self.out.mkdir(mode=0o700,exist_ok=True)
         self.position=0
         self.finished=False
+        self.issued=False
+        self.clipboard_pending=False
         self.recorder=None
         self.lock=threading.Lock()
         self.last_checkpoint='preparing test'
@@ -73,20 +76,65 @@ class Scenario:
         path=self.stage/name
         tmp=path.with_suffix('.tmp');tmp.write_text(text);tmp.replace(path)
 
-    def action(self,name):
+    prepair_points={'chooser-found','chooser-center-tapped','chooser-retapped','form-visible','field-located','before-secret'}
+    public_labels=('deepseek harness','open webui','hermes agent','server address','launch token','connect','cancel','allow','continue','paste','next','done','conduit')
+    def discard_diagnostic(self):
+        for suffix in ('-safe','.png','.txt'):
+            (self.stage/('xctest-prepair'+suffix)).unlink(missing_ok=True)
+
+    def prepair(self,name,raw):
+        if self.issued or self.position not in (1,2,3) or name not in self.prepair_points:raise ValueError('outside credential-free form')
+        self.discard_diagnostic()
+        lines=['checkpoint '+name]
+        for line in raw.splitlines()[:700]:
+            match=re.search(r'\b(Application|Window|Group|Other|Button|StaticText|TextField|SecureTextField|TextView|ScrollView|Keyboard|Alert|MenuItem|WebView|Cell)\b',line)
+            if not match:continue
+            labels=[w for w in self.public_labels if re.search(r'(?<![a-z])'+re.escape(w)+r'(?![a-z])',line.lower())]
+            frame=re.search(r'\{\{(-?[\d.]+),\s*(-?[\d.]+)\},\s*\{([\d.]+),\s*([\d.]+)\}\}',line)
+            lines.append(' '.join([match.group(1),','.join(frame.groups()) if frame else '-',','.join(labels)]))
+        self.sim('io',self.uid,'screenshot',str(self.stage/'xctest-prepair.png'))
+        (self.stage/'xctest-prepair.txt').write_text('\n'.join(lines)+'\n')
+        self.mark('xctest-prepair-safe','verified')
+        present=[w for w in self.public_labels if any(w in line for line in lines[1:])]
+        print('iOS XCTest pre-pair:',name,'known labels:',','.join(present),'nodes:',len(lines)-1,flush=True)
+        return b'ok'
+
+    def clipboard(self,value):
+        subprocess.run(['xcrun','simctl','pbcopy',self.uid],input=value,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=30)
+        if not value:
+            r=subprocess.run(['xcrun','simctl','pbpaste',self.uid],check=True,capture_output=True,timeout=30)
+            if r.stdout.strip():raise ValueError('uncleared simulator pasteboard')
+
+    def credential(self,name):
+        token=(self.stage/'token.private').read_bytes().strip()
+        if not re.fullmatch(rb'[a-zA-Z0-9._~%=-]{8,256}',token):raise ValueError('fixture token')
+        self.discard_diagnostic();self.issued=True
+        if name=='paste-link':
+            self.clipboard_pending=True
+            self.clipboard(('http://127.0.0.1:43671/?'+urlencode({'token':token.decode()})).encode())
+            return b'ok'
+        return token
+
+    def action(self,name,body=''):
         with self.lock:
             if self.finished:raise ValueError('finished')
+            if name.startswith('prepair-'):return self.prepair(name[8:],body)
+            if name=='clear-clipboard' and self.issued and self.position==4:
+                self.clipboard(b'');self.clipboard_pending=False;return b'ok'
+            if name=='fixture-token' and self.issued and self.position==4 and not self.clipboard_pending:
+                return self.credential(name)
+            step='fixture-token' if name=='paste-link' else name
             if self.position<len(self.order):
-                if name!=self.order[self.position]:raise ValueError('out of sequence')
+                if step!=self.order[self.position]:raise ValueError('out of sequence')
             elif name not in ('web-sent','web-history'):
                 raise ValueError('unknown web proof')
             answer=b'ok'
             if name in ('chooser','pairing','paired','transcript','workspace'):
                 self.shot('paired-proof' if name=='paired' else name)
-            elif name=='fixture-token':
-                answer=(self.stage/'token.private').read_bytes().strip()
-                if not re.fullmatch(rb'[a-zA-Z0-9._~%=-]{8,256}',answer):raise ValueError('fixture token')
-            elif name=='record':self.start()
+            elif step=='fixture-token':answer=self.credential(name)
+            elif name=='record':
+                if self.clipboard_pending:raise ValueError('uncleared clipboard')
+                self.start()
             elif name=='reply':
                 self.stop();self.preserve('reply')
             elif name=='native':self.preserve('native')
@@ -105,7 +153,10 @@ def server_for(scenario):
         def do_POST(self):
             if self.client_address[0]!='127.0.0.1' or not hmac.compare_digest(self.headers.get('X-Garden-Runner',''),scenario.key):
                 self.send_error(403);return
-            try:body=scenario.action(self.path.removeprefix('/'))
+            try:
+                length=int(self.headers.get('Content-Length','0'))
+                if length<0 or length>180000:raise ValueError('size')
+                body=scenario.action(self.path.removeprefix('/'),self.rfile.read(length).decode('utf-8',errors='replace'))
             except Exception:
                 self.send_error(409);return
             self.send_response(200)
@@ -184,6 +235,8 @@ def main():
             sys.exit('XCTest stopped after verified stage: '+scenario.last_checkpoint+'. XCTest output remains private.')
     finally:
         server.shutdown();server.server_close();scenario.stop(require=False)
+        if scenario.clipboard_pending:
+            scenario.clipboard(b'')
         # XCTest can include screenshots, host paths and keyboard diagnostics. Only
         # the explicitly generated simulator media and checkpoint markers go to the sealer.
         (work/'Bootstrap.plist').unlink(missing_ok=True)

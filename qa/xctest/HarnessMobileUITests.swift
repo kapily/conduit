@@ -26,7 +26,7 @@ final class HarnessMobileUITests: XCTestCase {
     }
 
     @discardableResult
-    private func bridge(_ name: String) throws -> String {
+    private func bridge(_ name: String, details: String = "") throws -> String {
         // A loopback socket in the test runner works independently of the app's ATS settings.
         guard let parts = URLComponents(string: endpoint), parts.host == "127.0.0.1",
               let port = parts.port, let port16 = UInt16(exactly: port) else {
@@ -51,7 +51,9 @@ final class HarnessMobileUITests: XCTestCase {
             }
         }
         guard connected == 0 else { throw FixtureFailure.bridge(name) }
-        let request = Data(("POST /" + name + " HTTP/1.0\r\nHost: localhost\r\nX-Garden-Runner: " + key + "\r\nContent-Length: 0\r\n\r\n").utf8)
+        let payload = Data(details.utf8)
+        var request = Data(("POST /" + name + " HTTP/1.0\r\nHost: localhost\r\nX-Garden-Runner: " + key + "\r\nContent-Length: " + String(payload.count) + "\r\n\r\n").utf8)
+        request.append(payload)
         let written = request.withUnsafeBytes { raw -> Bool in
             guard let base = raw.baseAddress else { return false }
             var offset = 0
@@ -125,6 +127,59 @@ final class HarnessMobileUITests: XCTestCase {
         _ = try control("Open Harness workspace", in: conduit, tap: true, seconds: 60)
     }
 
+    private func diagnostic(_ checkpoint: String) throws {
+        // Only callable before credentials are issued; the host filters this in memory.
+        try bridge("prepair-" + checkpoint, details: String(conduit.debugDescription.prefix(36000)))
+    }
+
+    private func formShowing() -> Bool {
+        return find("Server Address", in: conduit) != nil &&
+            find("Launch token", in: conduit) != nil
+    }
+
+    private func coordinate(for heading: String, secure: Bool) throws -> XCUICoordinate {
+        let typed = secure ? conduit.secureTextFields.firstMatch : conduit.textFields.firstMatch
+        if typed.exists && typed.isHittable {
+            return typed.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        }
+        let matches = conduit.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS[c] %@", heading))
+            .allElementsBoundByIndex.filter { $0.exists && $0.frame.width > 0 && $0.frame.height > 0 && $0.frame.height < 110 }
+        if let editable = matches.filter({ $0.elementType != .staticText && $0.frame.height >= 30 }).last {
+            return editable.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        }
+        guard let title = matches.first else { throw FixtureFailure.missingControl("verified form heading") }
+        let frame = conduit.frame
+        // Each visible heading is followed by 8pt of space and the corresponding input.
+        let hit = CGPoint(x: frame.midX, y: title.frame.maxY + 26)
+        guard frame.insetBy(dx: 1, dy: 5).contains(hit) else { throw FixtureFailure.wrongScreen }
+        return conduit.coordinate(withNormalizedOffset: .zero).withOffset(
+            CGVector(dx: hit.x - frame.minX, dy: hit.y - frame.minY))
+    }
+
+    private func acceptedAddress() -> Bool {
+        if conduit.textFields.allElementsBoundByIndex.contains(where: {
+            ($0.value as? String)?.contains("127.0.0.1:43671") == true
+        }) { return true }
+        return find("127.0.0.1:43671", in: conduit) != nil
+    }
+
+    private func submitForm() {
+        if let connect = find("Connect", in: conduit, exact: true, tap: true) {
+            connect.tap()
+        } else {
+            conduit.typeText("\n")
+            if formShowing() { conduit.typeText("\n") }
+        }
+    }
+
+    private func emptyCatalog(_ seconds: TimeInterval) -> Bool {
+        until(seconds) {
+            dialog()
+            return find("No conversations yet", in: conduit, exact: true)
+        } != nil
+    }
+
     private func pair() throws {
         try bridge("phase-chooser")
         conduit.launch()
@@ -134,33 +189,59 @@ final class HarnessMobileUITests: XCTestCase {
             chooser = until(3) { find("DeepSeek Harness", in: conduit, tap: true) }
         }
         guard let button = chooser else { throw FixtureFailure.wrongScreen }
+        try diagnostic("chooser-found")
         try bridge("chooser")
-        button.tap()
-        _ = try control("Connect", in: conduit)
-        let urlField = conduit.textFields.firstMatch
-        let secure = conduit.secureTextFields.firstMatch
-        guard urlField.waitForExistence(timeout: 20), secure.waitForExistence(timeout: 12) else {
-            throw FixtureFailure.missingControl("blank connection fields")
+        button.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        try diagnostic("chooser-center-tapped")
+        if until(10, { formShowing() ? conduit : nil }) == nil {
+            dialog()
+            if let fresh = find("DeepSeek Harness", in: conduit, tap: true) {
+                fresh.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.5)).tap()
+            }
+            try diagnostic("chooser-retapped")
+            guard until(25, { formShowing() ? conduit : nil }) != nil else { throw FixtureFailure.wrongScreen }
         }
+        try diagnostic("form-visible")
+        let url = try coordinate(for: "Server Address", secure: false)
+        try diagnostic("field-located")
         try bridge("pairing")
-        urlField.tap()
-        urlField.typeText(address)
-        secure.tap()
-        // Only the disposable fixture issues a token. Its secure input and all XCTest output are private.
+        url.tap()
+        try diagnostic("before-secret")
+        try bridge("paste-link")
+        url.press(forDuration: 0.9)
+        let paste = until(6) {
+            find("Paste", in: conduit, exact: true, tap: true) ??
+            find("Paste", in: system, exact: true, tap: true)
+        }
+        if let paste { paste.tap() }
+        let pasted = until(8) {
+            dialog()
+            return acceptedAddress() ? conduit : nil
+        } != nil
+        try bridge("clear-clipboard")
+        if pasted {
+            submitForm()
+            if emptyCatalog(15) { try bridge("paired"); return }
+        }
+        guard formShowing() else { throw FixtureFailure.wrongScreen }
+        if !acceptedAddress() {
+            try coordinate(for: "Server Address", secure: false).tap()
+            conduit.typeText(address)
+        }
+        try coordinate(for: "Launch token", secure: true).tap()
         let token = try bridge("fixture-token")
         guard !token.isEmpty else { throw FixtureFailure.wrongScreen }
-        secure.typeText(token)
-        if let connect = find("Connect", in: conduit, exact: true, tap: true) {
-            connect.tap()
-        } else {
-            secure.typeText("\n")
+        // Avoid adding text to a token that the full launch-link formatter already filled.
+        if !pasted {
+            let secure = conduit.secureTextFields.firstMatch
+            if secure.exists && secure.isHittable { secure.typeText(token) }
+            else { conduit.typeText(token) }
         }
-        guard until(65, {
-            dialog()
-            return find("No conversations yet", in: conduit, exact: true)
-        }) != nil else { throw FixtureFailure.wrongScreen }
+        submitForm()
+        guard emptyCatalog(55) else { throw FixtureFailure.wrongScreen }
         try bridge("paired")
     }
+
 
     private func verifyNative() throws {
         _ = try control(question, in: conduit, exact: false, seconds: 35)
