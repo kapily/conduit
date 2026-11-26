@@ -36,6 +36,7 @@ class Receipt:
         self.nonce=nonce
         self.media=media
         self.phase='initial'
+        self.authenticated=False
         self.lock=threading.Lock()
 
     def request(self,client,host,cap,origin,path,size):
@@ -44,7 +45,7 @@ class Receipt:
         with self.lock:
             if path.startswith('/mark-'):
                 mark=path[6:]
-                if mark in {'typed','connect-visible','connect-pressed','form-gone','catalog','pair-rejected','pair-unavailable','provider-error','recorder-error','wait-Connect','wait-authenticated-sky-sessions','unauthenticated-empty-catalog','missing-session','directory-picker','workspace-catalog'}:
+                if mark in {'grant-stored','grant-unavailable','grant-unauthorized','grant-invalidAddress','grant-invalidResponse','grant-untrustedHost','typed','connect-visible','connect-pressed','form-gone','catalog','pair-rejected','pair-unavailable','provider-error','recorder-error','wait-Connect','wait-authenticated-sky-sessions','unauthenticated-empty-catalog','missing-session','directory-picker','workspace-catalog'}:
                     print('Synthetic iOS verification checkpoint: '+mark,flush=True)
                     return 200,b'ok'
                 return 409,b''
@@ -53,6 +54,9 @@ class Receipt:
             if expected=='credential':
                 data=self.token.encode()
             else:
+                if expected=='paired':
+                    self.authenticated=True
+                    print('Authenticated synthetic workspace catalog confirmed before recording.',flush=True)
                 try:
                     getattr(self.media,expected)()
                 except Exception as exc:
@@ -187,7 +191,7 @@ def main():
             for pattern in ['Garden check did not reach','Local garden controller rejected','A Dart VM Service','A RenderFlex overflowed','TestFailure','StateError','SocketException','DioException','FlutterError','TimeoutException','Bad state: No element','Routing error','Test timed out','Expected:','Failed to load','failed assertion','Start Flutter debug session','was thrown','Error launching','The application failed to start','Error connecting to the service protocol','not a subtype of type','HttpException','No Material widget found','The framework has been disposed','Multiple exceptions','Expected a single matching node','was hit tested at']:
                 if pattern.casefold() in full.casefold():print('Integration output classification: '+pattern,flush=True)
 
-            if receipt.phase in ('paired','selected','folders','verified','restored'):
+            if receipt.authenticated:
                 with contextlib.suppress(Exception):media.screenshot('diagnostic')
             raise Failure('Device integration failed after fixed phase '+receipt.phase+'.')
         print('Verified workspace switch, server directory creation, registration, and scoped chat creation in the installed iPhone app.',flush=True)

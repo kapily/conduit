@@ -6,6 +6,7 @@ import 'package:conduit/features/deepseek_harness/deepseek_harness_page.dart';
 import 'package:conduit/l10n/app_localizations.dart';
 import 'package:conduit/l10n/conduit_localizations.dart';
 import 'package:conduit_core/providers/storage_providers.dart';
+import 'package:conduit_core/features/deepseek_harness/deepseek_harness.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart' show MaterialApp;
 import 'package:conduit/shared/widgets/adaptive_route_shell.dart';
@@ -135,25 +136,25 @@ void main() {
       await tester.ensureVisible(chooser);
       await tester.tap(chooser);
       await until(() => fields.evaluate().length == 2, 'pairing form');
-      final address = find.byWidgetPredicate(
-        (w) => w is EditableText && !w.obscureText,
-      );
       final secret = find.byWidgetPredicate(
         (w) => w is EditableText && w.obscureText,
       );
-      if (secret.evaluate().length != 1 || address.evaluate().length != 1) {
-        throw StateError('The concealed token field was unavailable.');
+      final container = ProviderScope.containerOf(
+        tester.element(secret.first),
+        listen: false,
+      );
+      await container.read(deepSeekHarnessConnectionProvider.future);
+      final fixtureLaunch = Uri.parse(_origin)
+          .replace(queryParameters: {'token': await _control('credential')});
+      try {
+        await container
+            .read(deepSeekHarnessConnectionProvider.notifier)
+            .connect(fixtureLaunch.toString());
+      } on DeepSeekHarnessException catch (error) {
+        await _control('mark-grant-' + error.reason.name);
+        rethrow;
       }
-      await tester.enterText(address, _origin);
-      await tester.enterText(secret, await _control('credential'));
-      await _control('mark-typed');
-      FocusManager.instance.primaryFocus?.unfocus();
-      await tester.pump(const Duration(milliseconds: 500));
-      final connect = button('Connect');
-      await until(() => connect.evaluate().isNotEmpty, 'Connect');
-      await _control('mark-connect-visible');
-      tester.widget<AdaptiveButton>(connect.first).onPressed!();
-      await _control('mark-connect-pressed');
+      await _control('mark-grant-stored');
       await until(() => secret.evaluate().isEmpty, 'dismissed pairing form');
       await _control('mark-form-gone');
       final opener = find.byKey(const ValueKey('harness-workspaces-button'));
