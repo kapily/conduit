@@ -65,7 +65,14 @@ jobs:
         run: |
           test "$(git rev-parse HEAD)" = "$EXPECTED"
           echo "QA_COMMIT=$EXPECTED" >> "$GITHUB_ENV"
+      - name: Look for the exact built app on this platform
+        id: app
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ runner.temp }}/garden-qa/app-build
+          key: garden-app-v1-${{ matrix.runner }}-flutter-3.50.0-${{ steps.product.outputs.revision }}
       - name: Install Flutter
+        if: steps.app.outputs.cache-hit != 'true'
         uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
         with:
           flutter-version: '3.50.0'
@@ -82,10 +89,14 @@ jobs:
           node-version: '24.15.0'
       - name: Install official Harness and test driver
         run: bash tooling/qa/tools.sh
+      - name: Preflight phone image, tooling and virtualization
+        run: cd conduit && bash ../tooling/qa/device.sh prepare "${{ matrix.platform }}"
       - name: Generate app and package sources
+        if: steps.app.outputs.cache-hit != 'true'
         working-directory: conduit
         run: dart tool/setup_worktree.dart
       - name: Restore public mobile build dependencies
+        if: steps.app.outputs.cache-hit != 'true'
         id: deps
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
@@ -95,10 +106,17 @@ jobs:
             ~/.gradle/caches/modules-2
             ~/.gradle/wrapper/dists
           key: garden-deps-v1-${{ matrix.runner }}-${{ hashFiles('conduit/pubspec.lock', 'conduit/ios/Podfile.lock', 'conduit/android/**/gradle-wrapper.properties', 'conduit/ios/**/Package.resolved') }}
-      - name: Build and install the real app on a fresh device
-        run: cd conduit && bash ../tooling/qa/device.sh "${{ matrix.platform }}"
+      - name: Build the real app at the selected revision
+        if: steps.app.outputs.cache-hit != 'true'
+        run: cd conduit && bash ../tooling/qa/device.sh build "${{ matrix.platform }}"
+      - name: Cache the verified clean build before booting the device
+        if: steps.app.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ runner.temp }}/garden-qa/app-build
+          key: ${{ steps.app.outputs.cache-primary-key }}
       - name: Save verified public SDK dependencies before device interaction
-        if: steps.deps.outputs.cache-hit != 'true'
+        if: steps.app.outputs.cache-hit != 'true' && steps.deps.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: |
@@ -107,6 +125,8 @@ jobs:
             ~/.gradle/caches/modules-2
             ~/.gradle/wrapper/dists
           key: ${{ steps.deps.outputs.cache-primary-key }}
+      - name: Boot a clean phone and install the verified app
+        run: cd conduit && bash ../tooling/qa/device.sh boot "${{ matrix.platform }}"
       - name: Start synthetic Harness and local model
         run: python3 tooling/qa/fixture.py
       - name: Exercise native and web workspaces, then seal verified media
