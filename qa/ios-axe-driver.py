@@ -175,6 +175,19 @@ class Driver:
         self.prepair = True
         self.warmed = False
         self.use_agent = False
+        self.selected_input = False
+
+    def failure_category(self,stdout,stderr):
+        values=(stdout+' '+stderr).lower()
+        categories=[
+            ('syntax',('unexpected argument','unknown option','unknown argument','missing required','usage: axe')),
+            ('accessibility',('accessibility','elementnotfound','ambiguous','targetchanged','targetcovered')),
+            ('input service',('indigohid','hid','mach port','service unavailable','xpc connection','core simulator service')),
+            ('inactive display',('screenchanged','display','frontmost')),
+            ('permission',('not permitted','denied','permission')),
+            ('temporarily busy',('busy','timed out','timeout','connection refused')),
+            ('unsupported',('unsupported','not available','unrecognized selector'))]
+        return next((category for category,words in categories if any(w in values for w in words)),'unclassified')
 
     def command(self, args, stdin=None, timeout=35, *, name):
         # The command label is fixed by the driver; arguments and input stay private.
@@ -183,7 +196,15 @@ class Driver:
         except subprocess.TimeoutExpired:
             raise Failed(f'{self.phase}: {name} timed out after {timeout}s') from None
         if r.returncode:
-            raise Failed(f'{self.phase}: {name} exited {r.returncode}')
+            category=self.failure_category(r.stdout,r.stderr)
+            if self.prepair and self.phase=='start at backend chooser' and name=='axe tap' and '-x' in args and '-y' in args and stdin is None:
+                x,y=(args[args.index(flag)+1] for flag in ('-x','-y'))
+                if all(re.fullmatch(r'\d+(?:\.\d+)?',v) for v in (x,y)):
+                    diagnostic=(self.stage/'prepair-tap-diagnostic.txt')
+                    if self.token not in r.stderr and not re.search(r'[?&]token=|dsh-auth-|Bearer\s+',r.stderr,re.I):
+                        with diagnostic.open('a') as out:
+                            out.write(f'axe tap at {x},{y}; exit={r.returncode}; category={category}\n'+r.stderr[:12000]+'\n')
+            raise Failed(f'{self.phase}: {name} exited {r.returncode} ({category})')
         return r.stdout
 
     def sim(self, *args):
@@ -196,6 +217,8 @@ class Driver:
             timeout=110 if not self.warmed else 55
         else:
             timeout=45
+        if self.selected_input and args[0] in ('tap','key-combo','key','type','swipe') and '--agent' not in args and '--input-mode' not in args:
+            args=(*args,'--input-mode','selected')
         return self.command([str(self.axe),*args,'--udid',self.uid],stdin=stdin,timeout=timeout,name='axe '+args[0])
 
     def check_guard(self):
@@ -254,6 +277,34 @@ class Driver:
             x,y,w,h=n.box
             self.ax('tap','-x',str(round(x+w/2,1)),'-y',str(round(y+h/2,1)))
         time.sleep(.30)
+
+    def activate_chooser(self,n):
+        # The selected iOS 27 HID route and the VoiceOver press are independent of
+        # the legacy coordinate backend. Recheck before retrying a completed tap.
+        try:
+            self.tap(n)
+            if self.wait(button('Connect'),seconds=5,optional=True):return
+        except Failed as error:
+            print('iOS QA: initial chooser tap:',str(error),flush=True)
+            if self.wait(button('Connect'),seconds=3,optional=True):return
+        self.selected_input=True
+        try:
+            response=json.loads(self.ax('describe-ui','--agent','--view','navigation'))
+            nodes=[item for item in agent_tree(response) if 'button' in item.kind and item.contains('DeepSeek Harness')]
+            if len(nodes)==1:
+                sid,ref=nodes[0].ref
+                self.ax('tap','--agent','--snapshot-id',sid,'--ref',ref,'--semantic-press')
+                if self.wait(button('Connect'),seconds=5,optional=True):return
+        except (Failed,ValueError) as error:
+            if isinstance(error,Failed):print('iOS QA: chooser accessibility action:',str(error),flush=True)
+            if self.wait(button('Connect'),seconds=3,optional=True):return
+        target=self.wait(lambda item:'button' in item.kind and item.contains('DeepSeek Harness'),seconds=10)
+        if target.box:
+            x,y,w,h=target.box
+            self.ax('tap','--input-mode','selected','--tap-style','physical','-x',str(round(x+w/2,1)),'-y',str(round(y+h/2,1)))
+        else:
+            self.ax('tap','--agent','--label-contains','DeepSeek Harness','--element-type','Button')
+        self.wait(button('Connect'),seconds=15)
 
     def type(self,value):
         self.ax('type','--layout','us','--stdin',stdin=value)
@@ -361,7 +412,7 @@ class Driver:
         self.sim('launch',self.uid,self.bundle)
         self.wait(lambda n:n.contains('DeepSeek Harness') or n.contains('Open WebUI'),seconds=40)
         n=self.wait(lambda n:n.contains('DeepSeek Harness') and not n.field,scroll=True)
-        self.shot('chooser');self.tap(n)
+        self.shot('chooser');self.activate_chooser(n)
         self.phase_start('pair with synthetic local workspace')
         self.wait(button('Connect'))
         nodes=self.items()
