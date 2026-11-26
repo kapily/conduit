@@ -54,6 +54,13 @@ jobs:
       - name: Prepare a fresh hosted device
         working-directory: conduit
         run: bash ../tooling/qa/device.sh prepare "${{ matrix.platform }}"
+      - name: Lookup exact Android build for the selected revision
+        if: matrix.platform == 'android'
+        id: original_android
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ runner.temp }}/garden-qa/app-build
+          key: garden-app-v1-${{ matrix.runner }}-flutter-3.50.0-${{ steps.revision.outputs.ref }}
       - name: Restore verified build dependencies
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
@@ -64,6 +71,7 @@ jobs:
             ~/.gradle/wrapper/dists
           key: garden-deps-v1-${{ matrix.runner }}-${{ hashFiles('conduit/pubspec.lock', 'conduit/ios/Podfile.lock', 'conduit/android/**/gradle-wrapper.properties', 'conduit/ios/**/Package.resolved') }}
       - name: Generate the pinned app and workspace packages
+        if: matrix.platform == 'ios' || steps.original_android.outputs.cache-hit != 'true'
         working-directory: conduit
         run: dart tool/setup_worktree.dart
       - name: Prepare public CocoaPods compiler input
@@ -73,13 +81,6 @@ jobs:
           python3 ../tooling/qa/ort_cache.py restore ../tooling/inputs/ort-1.22.0.tgz "$QA_STAGE/cocoapods-cache"
           echo "CP_CACHE_DIR=$QA_STAGE/cocoapods-cache" >> "$GITHUB_ENV"
           echo "XCODE_XCCONFIG_FILE=$PWD/ios/Flutter/ArmOnly.xcconfig" >> "$GITHUB_ENV"
-      - name: Lookup exact Android build for the selected revision
-        if: matrix.platform == 'android'
-        id: original_android
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        with:
-          path: ${{ runner.temp }}/garden-qa/app-build
-          key: garden-app-v1-${{ matrix.runner }}-flutter-3.50.0-${{ steps.revision.outputs.ref }}
       - name: Build original Android app before booting the emulator
         if: matrix.platform == 'android' && steps.original_android.outputs.cache-hit != 'true'
         working-directory: conduit

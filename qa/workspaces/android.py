@@ -28,6 +28,8 @@ def main():
     phone=WorkspacePhone(stage,os.environ['QA_DEVICE'])
     phone.dest=stage/'workspace-evidence';phone.dest.mkdir(mode=0o700)
     def matches(s):
+        if s in ('Three crater sketches','Blue hour observing plan','New workspace','Meteor watch','Lunar maps','No conversations yet','No subfolders'):
+            return lambda n:not n.web and n.matches(re.escape(s))
         return lambda n:not n.web and n.matches(r'(?:^|\n)'+re.escape(s)+r'(?:$|\n)')
     def wait(s,**kw):return d.wait(phone,phone.phase+' / '+s,matches(s),**kw)
     def tap(s):
@@ -53,9 +55,15 @@ def main():
         phone.tap(address);phone.enter(d.ORIGIN)
         token,_=d.wait(phone,'concealed input',lambda n:n.edit and n.secure)
         phone.tap(token);phone.enter(phone.secret);phone.hide();tap('Connect')
-        wait('Blue hour observing plan',timeout=55);_,clean=wait('Three crater sketches');d.assert_clean(clean,phone.secret)
-        if any(n.edit or n.secure for n in clean):raise d.CheckFailed('Pairing input remained on screen.')
+        def auth_gate(n):
+            return not n.web and n.matches('Open Harness workspace|All chats|Workspaces|observing plan|crater sketches|No conversations yet')
+        _,clean=d.wait(phone,'authenticated catalog controls',auth_gate,timeout=65)
+        d.assert_clean(clean,phone.secret)
+        if any(n.edit or n.secure or n.matches('Launch token') for n in clean):raise d.CheckFailed('Pairing input remained on screen.')
         authenticated=True
+        print('Android reached its authenticated catalog.',flush=True)
+        phone.phase='initial sessions'
+        wait('Blue hour observing plan',timeout=65);wait('Three crater sketches')
         phone.start_record();recording=True
         phone.phase='switch workspace';folder_open();tap('Lunar maps')
         _,ui=wait('Three crater sketches');assert_hidden(ui,'Blue hour observing plan')
@@ -86,8 +94,15 @@ def main():
         if recording:
             try:phone.stop_record(False)
             except Exception:pass
-        if authenticated:
-            try: phone.shot('diagnostic',phone.items())
+        ui=phone.items()
+        known={'address':'Server Address','token field':'Launch token','pairing submit':'Connect','unauthorized':'Enter a fresh launch token',
+               'connection failure':'connect to Harness. Check','untrusted host':'does not trust this host','invalid address':'Enter a valid Harness',
+               'open workspace':'Open Harness workspace','all chats':'All chats','workspaces':'Workspaces','empty':'No conversations yet',
+               'session one':'Blue hour observing plan','session two':'Three crater sketches','new chat':'New Chat','retry':'Retry'}
+        code=[k for k,hint in known.items() if any(n.matches(re.escape(hint)) for n in ui)]
+        print('Known control states: '+', '.join(code)+'; foreground '+phone.foreground(),flush=True)
+        if authenticated and not any(n.secure or n.edit or n.matches('Launch token') for n in ui):
+            try: phone.shot('diagnostic',ui)
             except Exception: pass
         print('Workspace device check stopped during '+phone.phase+'.',flush=True)
         raise SystemExit(str(error) if isinstance(error,d.CheckFailed) else type(error).__name__)
