@@ -21,7 +21,7 @@ logs.mkdir()
 cert=src/'recipient.pem'
 if b'PRIVATE KEY' in cert.read_bytes() or not cert.read_bytes().startswith(b'-----BEGIN CERTIFICATE-----'):
     raise SystemExit('Expected the public recipient certificate.')
-driver='Android platform tools / uiautomator' if platform=='android' else 'AXe 2.2.0 / simctl'
+driver='Android platform tools / uiautomator' if platform=='android' else 'Apple XCTest / simctl'
 web_results={
     'sent-second-prompt': 'sent another prompt and verified the unique server reply in the official workspace',
     'read-native-history': 'opened the persisted native question and its complete server reply in the official workspace',
@@ -72,9 +72,7 @@ def seal(suffix):
     archive.unlink()
     print('Sealed verified '+suffix+' for private offline inspection.',flush=True)
 
-if platform=='ios':
-    run(['bash',str(src/'install-ios-axe.sh')],timeout=150)
-command=src/('android-native-driver.py' if platform=='android' else 'ios-axe-driver.py')
+command=src/('android-native-driver.py' if platform=='android' else 'xctest/ios-xctest-driver.py')
 reply_proof=stage/'reply-verified'
 proof=stage/'native-verified'
 process=subprocess.Popen([sys.executable,str(command)])
