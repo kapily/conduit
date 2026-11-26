@@ -61,16 +61,16 @@ case "$1-$2" in
   cp "$apk" "$product/Conduit.apk"
   ;;
  boot-ios)
-  test -f "$product/Conduit.app/Info.plist"
+  [[ "${QA_WIDGET_ONLY:-}" == 1 ]] || test -f "$product/Conduit.app/Info.plist"
   uid=$(cat "$stage/ios-device")
   xcrun simctl boot "$uid"
   xcrun simctl bootstatus "$uid" -b
   xcrun simctl status_bar "$uid" override --time 9:41 --batteryState charged --batteryLevel 100 --cellularBars 4 --wifiBars 3
-  xcrun simctl install "$uid" "$product/Conduit.app"
+  [[ "${QA_WIDGET_ONLY:-}" == 1 ]] || xcrun simctl install "$uid" "$product/Conduit.app"
   echo "QA_DEVICE=$uid" >> "$GITHUB_ENV"
   ;;
  boot-android)
-  test -f "$product/Conduit.apk"
+  [[ "${QA_WIDGET_ONLY:-}" == 1 ]] || test -f "$product/Conduit.apk"
   if [[ -x android/gradlew ]]; then (cd android && ./gradlew --stop) > "$stage/gradle-stop.log" 2>&1 || true; fi
   df -Pk "$stage" | awk 'NR==2 {print "Free KiB before device boot:",$4}'
   (
@@ -94,7 +94,7 @@ case "$1-$2" in
   adb -s "$uid" shell wm dismiss-keyguard
   adb -s "$uid" shell input keyevent 82
   adb -s "$uid" reverse tcp:43671 tcp:43671
-  adb -s "$uid" install "$product/Conduit.apk" > /dev/null
+  [[ "${QA_WIDGET_ONLY:-}" == 1 ]] || adb -s "$uid" install "$product/Conduit.apk" > /dev/null
   echo "QA_DEVICE=$uid" >> "$GITHUB_ENV"
   ;;
  *) exit 2 ;;

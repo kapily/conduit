@@ -1,0 +1,94 @@
+name: Verify device widget integration
+on:
+  push:
+    branches: [codex/harness-widget-device-verification]
+permissions:
+  contents: read
+jobs:
+  device:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: android
+            runner: ubuntu-24.04
+          - platform: ios
+            runner: macos-26
+    name: Garden widgets on ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 85
+    env:
+      QA_WIDGET_ONLY: '1'
+      FLUTTER_SUPPRESS_ANALYTICS: true
+      COCOAPODS_DISABLE_STATS: true
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          path: tooling
+          persist-credentials: false
+      - id: revision
+        run: |
+          SHA=$(cat tooling/qa/source-commit)
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]]
+          echo "ref=$SHA" >> "$GITHUB_OUTPUT"
+          echo "QA_COMMIT=$SHA" >> "$GITHUB_ENV"
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ steps.revision.outputs.ref }}
+          path: conduit
+          persist-credentials: false
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
+        with:
+          flutter-version: '3.50.0'
+          channel: stable
+          cache: true
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.15.0'
+      - name: Install fixture and capture tools
+        run: bash tooling/qa/tools.sh
+      - name: Prepare a fresh hosted device
+        working-directory: conduit
+        run: bash ../tooling/qa/device.sh prepare "${{ matrix.platform }}"
+      - name: Restore verified build dependencies
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            conduit/ios/Pods
+            ~/Library/Caches/org.swift.swiftpm/repositories
+            ~/.gradle/caches/modules-2
+            ~/.gradle/wrapper/dists
+          key: garden-deps-v1-${{ matrix.runner }}-${{ hashFiles('conduit/pubspec.lock', 'conduit/ios/Podfile.lock', 'conduit/android/**/gradle-wrapper.properties', 'conduit/ios/**/Package.resolved') }}
+      - name: Generate the pinned app and workspace packages
+        working-directory: conduit
+        run: dart tool/setup_worktree.dart
+      - name: Prepare public CocoaPods compiler input
+        if: matrix.platform == 'ios'
+        working-directory: conduit
+        run: |
+          python3 ../tooling/qa/ort_cache.py restore ../tooling/inputs/ort-1.22.0.tgz "$QA_STAGE/cocoapods-cache"
+          echo "CP_CACHE_DIR=$QA_STAGE/cocoapods-cache" >> "$GITHUB_ENV"
+          echo "XCODE_XCCONFIG_FILE=$PWD/ios/Flutter/ArmOnly.xcconfig" >> "$GITHUB_ENV"
+      - name: Boot the disposable verification device
+        working-directory: conduit
+        run: bash ../tooling/qa/device.sh boot "${{ matrix.platform }}"
+      - name: Start the isolated server and synthetic model
+        run: python3 tooling/qa/fixture.py
+      - name: Exercise the production widget tree on the device
+        working-directory: conduit
+        run: python3 ../tooling/qa/widget-fallback/hosted.py "${{ matrix.platform }}"
+      - name: Seal verified device media for offline review
+        if: always() && env.QA_STAGE != ''
+        run: python3 tooling/qa/widget-fallback/seal.py "${{ matrix.platform }}"
+      - name: Stage sealed evidence for review
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ${{ matrix.platform }}-widget-review
+          path: ${{ runner.temp }}/${{ matrix.platform }}-widget-review.p7m
+          if-no-files-found: ignore
+          retention-days: 2
