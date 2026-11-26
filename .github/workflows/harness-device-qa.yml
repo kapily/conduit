@@ -162,6 +162,14 @@ jobs:
           path: ${{ runner.temp }}/${{ matrix.platform }}-review.p7m
           if-no-files-found: error
           retention-days: 2
+      - name: Stage the verified native reply if a later lifecycle check failed
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ${{ matrix.platform }}-reply-review
+          path: ${{ runner.temp }}/${{ matrix.platform }}-reply-review.p7m
+          if-no-files-found: ignore
+          retention-days: 2
       - name: Stage completed native evidence if a subsequent workspace check failed
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

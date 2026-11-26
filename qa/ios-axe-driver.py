@@ -13,6 +13,7 @@ import subprocess
 import sys
 import time
 import uuid
+from urllib.parse import urlencode
 
 NATIVE = 'Give me a checklist for a tray of basil seedlings.'
 NATIVE_REPLY = 'Check the soil again tomorrow.'
@@ -24,6 +25,10 @@ EMPTY = 'No conversations yet'
 
 
 class Failed(Exception):
+    pass
+
+
+class ClipboardCleanupFailed(Failed):
     pass
 
 
@@ -315,6 +320,42 @@ class Driver:
         self.phase=label
         print('iOS QA:',label,flush=True)
 
+    def clipboard(self, text):
+        # This is the disposable simulator's clipboard. Do not pass the launch link in argv.
+        self.command(['xcrun','simctl','pbcopy',self.uid],stdin=text,timeout=35,name='simctl pbcopy')
+
+    def paste_pair(self, address):
+        self.phase_start('paste the generated connection into the blank address field')
+        self.tap(address)
+        try:
+            self.clipboard(ORIGIN+'?'+urlencode({'token':self.token}))
+            self.ax('key-combo','--modifiers','227','--key','25')  # Cmd+V
+            # A paste permission prompt must be answered before clearing the temporary pasteboard.
+            self.wait(lambda n:n.field and n.contains(ORIGIN), seconds=14,
+                      dialogs=('Allow Paste','Paste','Allow'))
+        finally:
+            try:self.clipboard('')
+            except Failed:
+                raise ClipboardCleanupFailed('Cannot clear the temporary pairing clipboard') from None
+        self.phase_start('submit the pasted connection')
+        # Return advances from URL to token. Both values were set by Conduit's paste formatter.
+        self.ax('key','40')
+        self.ax('key','40')
+        self.wait(has(EMPTY),seconds=30,dialogs=('Connect','Allow','OK'))
+
+    def typed_pair(self):
+        self.phase_start('retry using the individual connection fields')
+        if self.wait(has(EMPTY),seconds=2,optional=True):return
+        url=field(self.items(),False)
+        if not url:raise Failed('Pairing form address field unavailable')
+        self.tap(url);self.ax('key-combo','--modifiers','227','--key','4')
+        self.type(ORIGIN);self.ax('key','40')
+        secret=field(self.items(),True)
+        if not secret:raise Failed('Secure sign-in field unavailable')
+        self.tap(secret);self.ax('key-combo','--modifiers','227','--key','4')
+        self.type(self.token);self.ax('key','40')
+        self.wait(has(EMPTY),seconds=50,dialogs=('Connect','Allow','OK'))
+
     def pair(self):
         self.phase_start('start at backend chooser')
         self.sim('launch',self.uid,self.bundle)
@@ -327,19 +368,22 @@ class Driver:
         url,token=field(nodes,False),field(nodes,True)
         if not url or not token or url is token:
             raise Failed('Cannot distinguish the two blank sign-in fields')
-        self.shot('pairing');self.prepair=False;self.tap(url);self.type(ORIGIN)
-        self.ax('key','40')
-        # Next focuses the secure field, including layouts that scroll it above the keyboard.
-        secret=field(self.items(),True)
-        if not secret:
-            raise Failed('Secure sign-in field absent')
-        self.tap(secret);self.type(self.token);self.ax('key','40')
-        self.wait(has(EMPTY),seconds=50,dialogs=('Connect','Allow','OK'))
+        self.shot('pairing');self.prepair=False
+        try:
+            self.paste_pair(url)
+        except ClipboardCleanupFailed:
+            raise
+        except Failed as error:
+            # Failed contains only fixed driver labels, command names and exit/timeout codes.
+            print('iOS QA: paste attempt incomplete:',str(error),flush=True)
+            self.typed_pair()
         self.shot('paired-proof')
 
     def verify_native(self):
         self.wait(has(NATIVE),seconds=15)
         self.wait(has(NATIVE_REPLY),seconds=30)
+        for line in ('Label each pot','Water the seedlings'):
+            self.wait(has(line),seconds=12)
 
     def return_list(self):
         self.wait(button('Chats','Back to chats','Back to sessions'),tap=True)
@@ -368,17 +412,18 @@ class Driver:
             self.return_list()
         raise Failed(self.phase + ': original native session could not be reopened')
 
-    def preserve_native(self):
-        movie=self.out/'garden-session.mp4'
+    def preserve_video(self,checkpoint):
+        assert checkpoint in ('reply','native')
+        movie=self.out/'garden-session.mp4' if checkpoint=='reply' else self.stage/'reply-session.mp4'
         fields=self.command(['ffprobe','-v','error','-show_entries','stream=codec_type:format=duration','-of','json',str(movie)],name='ffprobe native recording')
         info=json.loads(fields)
         if float(info.get('format',{}).get('duration',0)) < 1 or not any(s.get('codec_type')=='video' for s in info.get('streams',[])):
             raise Failed('Native recording failed media validation')
-        dest=self.stage/'native-session.mp4'
+        dest=self.stage/(checkpoint+'-session.mp4')
         temp=dest.with_suffix('.tmp')
         shutil.copyfile(movie,temp);temp.replace(dest)
-        self.mark('native-verified','verified')
-        print('iOS QA: native cold-reopen proof preserved.',flush=True)
+        self.mark(checkpoint+'-verified','verified')
+        print('iOS QA: validated',checkpoint,'evidence preserved.',flush=True)
 
     def mark(self,name,text):
         dest=self.stage/name
@@ -424,15 +469,16 @@ class Driver:
             self.wait(editor,dialogs=('Seedling notebook',),tap=True)
             self.type(NATIVE);self.wait(button('Send'),tap=True)
             self.verify_native(); self.shot('transcript')
-            self.phase_start('reopen native transcript')
-            self.return_list();self.reopen()
             success=True
         finally:
             self.stop(success)
+        self.preserve_video('reply')
+        self.phase_start('reopen native transcript')
+        self.return_list();self.reopen()
         self.phase_start('cold launch and restore native conversation')
         self.sim('terminate',self.uid,self.bundle);self.sim('launch',self.uid,self.bundle)
         self.wait(button(OPEN),seconds=75);self.reopen()
-        self.preserve_native()
+        self.preserve_video('native')
         self.return_list();self.verify_web()
         print('iOS AXe verified the native and web replies and restored native history.',flush=True)
 

@@ -170,6 +170,10 @@ class Phone:
         self.shell('input','keycombination','113','29')
         self.shell('input','keyevent','67')
 
+    def reply_checkpoint(self):
+        shutil.copyfile(self.dest/'garden-session.mp4', self.stage/'reply-session.mp4')
+        (self.stage/'reply-verified').write_text('full-native-reply\n')
+
     def native_checkpoint(self):
         shutil.copyfile(self.dest/'garden-session.mp4', self.stage/'native-session.mp4')
         (self.stage/'native-verified').write_text('cold-reopened-native-history\n')
@@ -432,12 +436,15 @@ def flow(p):
         wait(p,'native streamed reply',lambda n:native(n) and n.matches(re.escape(ANSWER)))
         p.hide()
         _,ui=wait(p,'native transcript preview',lambda n:native(n) and n.matches(re.escape(ANSWER)))
+        for fragment in (QUESTION,'Label each pot.','Water the seedlings.',ANSWER):
+            wait(p,'complete native turn',lambda n:native(n) and n.matches(re.escape(fragment)))
         p.shot('transcript',ui)
-        p.phase='reopened native session'
-        back();reopen();back()
         success=True
     finally:
         p.stop_record(success)
+    p.reply_checkpoint()
+    p.phase='reopened native session'
+    back();reopen();back()
     p.phase='cold launch'
     p.start()
     wait(p,'restored paired catalog',lambda n:native(n) and n.exact(OPEN_WORKSPACE))

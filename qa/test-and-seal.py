@@ -29,8 +29,8 @@ web_results={
 def run(command,**options):
     return subprocess.run(command,check=True,**options)
 
-def seal(native_only):
-    suffix='native-review' if native_only else 'review'
+def seal(suffix):
+    native_only=suffix in ('reply-review','native-review')
     dest=stage/('verified-'+suffix)
     dest.mkdir()
     screens=['chooser.png','pairing.png','transcript.png']
@@ -40,13 +40,15 @@ def seal(native_only):
         if len(matches)!=1 or matches[0].stat().st_size<1000:
             raise RuntimeError('Expected one non-empty verified screenshot for '+name)
         shutil.copyfile(matches[0],dest/(platform+'-'+name))
-    marker=stage/'native-verified'
-    video=(stage/'native-session.mp4') if native_only else (logs/'garden-session.mp4')
+    reply_only=suffix=='reply-review'
+    marker=stage/('reply-verified' if reply_only else 'native-verified')
+    video=(stage/('reply-session.mp4' if reply_only else 'native-session.mp4')) if native_only else (logs/'garden-session.mp4')
     if not marker.is_file() or not video.is_file() or video.stat().st_size<1000:
         raise RuntimeError('The completed native scenario must provide its verified recording.')
     video_name=platform+'-garden-session.mp4'
-    if not native_only and filecmp.cmp(video,stage/'native-session.mp4',shallow=False):
-        shutil.copyfile(stage/'verified-native-review'/video_name,dest/video_name)
+    source_video=stage/'reply-session.mp4'
+    if not reply_only and source_video.is_file() and filecmp.cmp(video,source_video,shallow=False):
+        shutil.copyfile(stage/'verified-reply-review'/video_name,dest/video_name)
     else:
         run(['nice','-n','12','ffmpeg','-nostdin','-hide_banner','-loglevel','error','-threads','1','-i',str(video),'-map','0:v:0','-an','-map_metadata','-1','-filter_threads','1','-vf','scale=720:-2','-c:v','libx264','-threads','1','-crf','23','-preset','fast','-pix_fmt','yuv420p','-movflags','+faststart',str(dest/video_name)])
     result='pending'
@@ -55,7 +57,7 @@ def seal(native_only):
         result=web_results[key]
     (dest/'verification.json').write_text(json.dumps({
         'platform':platform,'conduit_source':os.environ['QA_COMMIT'],
-        'harness':'0.2.2-rc.5','ui_automation':driver,'native_chat':'sent, streamed and reopened after a cold launch',
+        'harness':'0.2.2-rc.5','ui_automation':driver,'native_chat':'sent and received the complete streamed reply' if reply_only else 'sent, streamed and reopened after a cold launch',
         'official_workspace':result,'manual_privacy_review':'pending'
     },indent=2))
     archive=stage/(suffix+'.tar')
@@ -73,15 +75,20 @@ def seal(native_only):
 if platform=='ios':
     run(['bash',str(src/'install-ios-axe.sh')],timeout=150)
 command=src/('android-native-driver.py' if platform=='android' else 'ios-axe-driver.py')
+reply_proof=stage/'reply-verified'
 proof=stage/'native-verified'
 process=subprocess.Popen([sys.executable,str(command)])
 deadline=time.monotonic()+(920 if platform=='ios' else 550)
+reply_sealed=False
 native_sealed=False
 try:
     while True:
         status=process.poll()
+        if reply_proof.is_file() and not reply_sealed:
+            seal('reply-review')
+            reply_sealed=True
         if proof.is_file() and not native_sealed:
-            seal(True)
+            seal('native-review')
             native_sealed=True
         if status is not None:break
         if time.monotonic()>deadline:raise RuntimeError('Device scenario exceeded its deadline.')
@@ -90,5 +97,5 @@ finally:
     if process.poll() is None:process.terminate();process.wait(timeout=15)
 if process.returncode:
     raise SystemExit('The later scenario did not complete.' if native_sealed else 'Device scenario failed before verified native history.')
-if not native_sealed:raise SystemExit('Missing completed native checkpoint.')
-seal(False)
+if not reply_sealed or not native_sealed:raise SystemExit('Missing required native checkpoint.')
+seal('review')
