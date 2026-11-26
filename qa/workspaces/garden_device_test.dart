@@ -73,7 +73,26 @@ void main() {
       while (!ready() && watch.elapsed < const Duration(seconds: 60)) {
         await tester.pump(const Duration(milliseconds: 150));
       }
-      if (!ready()) throw StateError('Garden check did not reach $step.');
+      if (!ready()) {
+        final flags = {
+          'pair-rejected': 'Enter a fresh launch token',
+          'pair-unavailable': 'connect to Harness. Check',
+          'unauthenticated-empty-catalog': 'No conversations yet',
+          'provider-error': 'Harness does not trust',
+          'missing-session': 'Blue hour observing plan',
+        };
+        for (final entry in flags.entries) {
+          if (find
+              .textContaining(entry.value, findRichText: true)
+              .evaluate()
+              .isNotEmpty)
+            await _control('mark-' + entry.key);
+        }
+        if (step == 'Connect' || step == 'authenticated sky sessions') {
+          await _control('mark-wait-' + step.replaceAll(' ', '-'));
+        }
+        throw StateError('Garden check did not reach $step.');
+      }
     }
 
     bool seen(String s) =>
@@ -127,7 +146,16 @@ void main() {
       }
       await tester.enterText(address, _origin);
       await tester.enterText(secret, await _control('credential'));
-      await press('Connect');
+      await _control('mark-typed');
+      FocusManager.instance.primaryFocus?.unfocus();
+      await tester.pump(const Duration(milliseconds: 500));
+      final connect = button('Connect');
+      await until(() => connect.evaluate().isNotEmpty, 'Connect');
+      await _control('mark-connect-visible');
+      tester.widget<AdaptiveButton>(connect.first).onPressed!();
+      await _control('mark-connect-pressed');
+      await until(() => secret.evaluate().isEmpty, 'dismissed pairing form');
+      await _control('mark-form-gone');
       final opener = find.byKey(const ValueKey('harness-workspaces-button'));
       final add = find.byKey(const ValueKey('harness-new-workspace'));
       Future<void> tapFinding(Finder finder, String name) async {
@@ -150,6 +178,8 @@ void main() {
             secret.evaluate().isEmpty,
         'authenticated sky sessions',
       );
+      await tester.pump(const Duration(milliseconds: 750));
+      await _control('mark-catalog');
       await _control('paired');
       await drawer();
       await tapFinding(row('Lunar maps'), 'select existing lunar workspace');

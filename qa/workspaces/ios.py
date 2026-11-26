@@ -42,12 +42,22 @@ class Receipt:
         if client!='127.0.0.1' or host!=f'127.0.0.1:{PORT}' or origin is not None or size!='0' or not hmac.compare_digest(cap,self.nonce):
             return 403,b''
         with self.lock:
+            if path.startswith('/mark-'):
+                mark=path[6:]
+                if mark in {'typed','connect-visible','connect-pressed','form-gone','catalog','pair-rejected','pair-unavailable','provider-error','recorder-error','wait-Connect','wait-authenticated-sky-sessions','unauthenticated-empty-catalog','missing-session','directory-picker','workspace-catalog'}:
+                    print('Synthetic iOS verification checkpoint: '+mark,flush=True)
+                    return 200,b'ok'
+                return 409,b''
             expected={'initial':'credential','credential':'paired','paired':'selected','selected':'folders','folders':'verified','verified':'restored'}.get(self.phase)
             if path!='/'+str(expected) or expected is None:return 409,b''
             if expected=='credential':
                 data=self.token.encode()
             else:
-                getattr(self.media,expected)()
+                try:
+                    getattr(self.media,expected)()
+                except Exception as exc:
+                    print('Hosted '+expected+' controller failed ('+type(exc).__name__+').',flush=True)
+                    raise
                 data=b'ok'
             self.phase=expected
             return 200,data
@@ -171,6 +181,12 @@ def main():
                 if re.fullmatch(r'(Bad state: )?(Local garden controller rejected [a-z]+\.|Garden check did not reach [A-Za-z ]+\.|Missing catalog navigation\.)',text):
                     safe.append(text)
             if safe:print('Workspace check: '+safe[-1],flush=True)
+            full=(stage/'flutter-integration.private.log').read_text(errors='ignore')
+            for hint in ['dismissed pairing form','authenticated sky sessions','visible Connect','Connect','select existing lunar workspace','new workspace','restored selected workspace and scoped catalog','filtered lunar sessions','three workspace options']:
+                if ('Garden check did not reach '+hint+'.') in full:print('Timed out waiting for: '+hint,flush=True)
+            for pattern in ['Garden check did not reach','Local garden controller rejected','A Dart VM Service','A RenderFlex overflowed','TestFailure','StateError','SocketException','DioException','FlutterError','TimeoutException','Bad state: No element','Routing error','Test timed out','Expected:','Failed to load','failed assertion','Start Flutter debug session','was thrown','Error launching','The application failed to start','Error connecting to the service protocol','not a subtype of type','HttpException','No Material widget found','The framework has been disposed','Multiple exceptions','Expected a single matching node','was hit tested at']:
+                if pattern.casefold() in full.casefold():print('Integration output classification: '+pattern,flush=True)
+
             if receipt.phase in ('paired','selected','folders','verified','restored'):
                 with contextlib.suppress(Exception):media.screenshot('diagnostic')
             raise Failure('Device integration failed after fixed phase '+receipt.phase+'.')
