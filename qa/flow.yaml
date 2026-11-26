@@ -1,0 +1,72 @@
+appId: app.cogwheel.conduit.debug
+---
+- launchApp:
+    clearState: true
+- extendedWaitUntil:
+    visible: ".*DeepSeek Harness.*"
+    timeout: 45000
+- takeScreenshot: chooser
+- tapOn: ".*DeepSeek Harness.*"
+- assertVisible: "Connect"
+- takeScreenshot: pairing
+- tapOn:
+    text: ".*Server Address.*"
+    index: 1
+- inputText: "http://127.0.0.1:43671/"
+- pressKey: Enter
+- inputText: "__LOCAL_LAUNCH_TOKEN__"
+- pressKey: Enter
+- tapOn:
+    text: Connect
+    optional: true
+- tapOn:
+    text: Allow
+    optional: true
+- extendedWaitUntil:
+    visible: "New Chat"
+    timeout: 45000
+- startRecording: garden-session
+- tapOn:
+    text: "New Chat"
+    index: 0
+- tapOn: "Message..."
+- inputText: "Give me a checklist for a tray of basil seedlings."
+- tapOn: "Send"
+- extendedWaitUntil:
+    visible: ".*Label each pot.*"
+    timeout: 45000
+- waitForAnimationToEnd
+- takeScreenshot: transcript
+- tapOn: "Chats"
+- extendedWaitUntil:
+    visible: "Open Harness workspace"
+    timeout: 15000
+- tapOn:
+    text: "(?is).*(Seedling notes|Give me a checklist|Label each pot).*"
+    index: 0
+- assertVisible: "(?s).*Give me a checklist for a tray of basil seedlings.*"
+- assertVisible: "(?s).*Label each pot.*"
+- tapOn: "Chats"
+- tapOn: "Open Harness workspace"
+- tapOn:
+    text: Continue
+    optional: true
+- extendedWaitUntil:
+    visible: "(?s).*Message or run a task.*"
+    timeout: 45000
+- takeScreenshot: workspace
+- tapOn: Back
+- extendedWaitUntil:
+    visible: "Open Harness workspace"
+    timeout: 15000
+- stopRecording
+- stopApp
+- launchApp
+- extendedWaitUntil:
+    visible: "Open Harness workspace"
+    timeout: 30000
+- tapOn:
+    text: "(?is).*(Seedling notes|Give me a checklist|Label each pot).*"
+    index: 0
+- assertVisible: "(?s).*Give me a checklist for a tray of basil seedlings.*"
+- assertVisible: "(?s).*Label each pot.*"

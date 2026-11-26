@@ -1,0 +1,110 @@
+name: Verify mobile Harness sessions
+on:
+  workflow_dispatch:
+    inputs:
+      source_repository:
+        description: Repository containing the Conduit source commit
+        required: true
+        type: string
+      source_commit:
+        description: Full Git commit to test
+        required: true
+        type: string
+  push:
+    branches: [codex/deepseek-harness-device-qa]
+permissions:
+  contents: read
+jobs:
+  phone:
+    name: Verify ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ios
+            runner: xcode-27
+          - platform: android
+            runner: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 85
+    env:
+      MAESTRO_CLI_NO_ANALYTICS: '1'
+      MAESTRO_DRIVER_STARTUP_TIMEOUT: '180000'
+      FLUTTER_SUPPRESS_ANALYTICS: 'true'
+      COCOAPODS_DISABLE_STATS: 'true'
+      NO_COLOR: '1'
+    steps:
+      - name: Get synthetic QA bundle
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          path: tooling
+          persist-credentials: false
+      - name: Select exact feature commit
+        id: product
+        env:
+          SOURCE_REVISION: ${{ inputs.source_commit }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [[ "$EVENT" == push ]]; then
+            SOURCE_REVISION=$(cat tooling/qa/source-commit)
+          fi
+          [[ "$SOURCE_REVISION" =~ ^[0-9a-f]{40}$ ]]
+          echo "revision=$SOURCE_REVISION" >> "$GITHUB_OUTPUT"
+      - name: Get Conduit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: ${{ inputs.source_repository || github.repository }}
+          ref: ${{ steps.product.outputs.revision }}
+          persist-credentials: false
+          path: conduit
+      - name: Record tested revision
+        working-directory: conduit
+        env:
+          EXPECTED: ${{ steps.product.outputs.revision }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED"
+          echo "QA_COMMIT=$EXPECTED" >> "$GITHUB_ENV"
+      - name: Install Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
+        with:
+          flutter-version: '3.50.0'
+          channel: stable
+          cache: true
+      - name: Install Java
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.15.0'
+      - name: Install official Harness and test driver
+        run: bash tooling/qa/tools.sh
+      - name: Generate app and package sources
+        working-directory: conduit
+        run: dart tool/setup_worktree.dart
+      - name: Build and install the real app on a fresh device
+        run: cd conduit && bash ../tooling/qa/device.sh "${{ matrix.platform }}"
+      - name: Start synthetic Harness and local model
+        run: python3 tooling/qa/fixture.py
+      - name: Exercise native and web workspaces, then seal verified media
+        run: python3 tooling/qa/test-and-seal.py "${{ matrix.platform }}"
+      - name: Stage encrypted evidence for offline review
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ${{ matrix.platform }}-review
+          path: ${{ runner.temp }}/${{ matrix.platform }}-review.p7m
+          if-no-files-found: error
+          retention-days: 2
+      - name: Seal limited build diagnostics
+        if: failure()
+        run: python3 tooling/qa/seal-diagnostics.py "${{ matrix.platform }}"
+      - name: Stage encrypted build error excerpt
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ${{ matrix.platform }}-build-diagnostics
+          path: ${{ runner.temp }}/${{ matrix.platform }}-diagnostics.p7m
+          if-no-files-found: ignore
+          retention-days: 2
