@@ -127,6 +127,19 @@ jobs:
           key: ${{ steps.deps.outputs.cache-primary-key }}
       - name: Boot a clean phone and install the verified app
         run: cd conduit && bash ../tooling/qa/device.sh boot "${{ matrix.platform }}"
+      - name: Capture clean iOS startup state before the local server issues a grant
+        if: matrix.platform == 'ios'
+        run: |
+          bash tooling/qa/install-ios-axe.sh
+          python3 tooling/qa/capture-initial-ios.py
+      - name: Stage the encrypted first iPhone screen for offline inspection
+        if: matrix.platform == 'ios'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ios-first-screen
+          path: ${{ runner.temp }}/ios-first-screen.p7m
+          if-no-files-found: error
+          retention-days: 2
       - name: Verify Android foreground and first-run controls with fixed labels
         if: matrix.platform == 'android'
         run: python3 tooling/qa/phone-status.py android initial
@@ -140,6 +153,14 @@ jobs:
           name: ${{ matrix.platform }}-review
           path: ${{ runner.temp }}/${{ matrix.platform }}-review.p7m
           if-no-files-found: error
+          retention-days: 2
+      - name: Stage completed native evidence if a subsequent workspace check failed
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ${{ matrix.platform }}-native-review
+          path: ${{ runner.temp }}/${{ matrix.platform }}-native-review.p7m
+          if-no-files-found: ignore
           retention-days: 2
       - name: Check Android process health and known controls on failure
         if: failure() && matrix.platform == 'android'

@@ -3,6 +3,7 @@ set -euo pipefail
 [[ ${GITHUB_ACTIONS:-} == true && ${RUNNER_ENVIRONMENT:-} == github-hosted && $(uname -m) == arm64 ]]
 stage=${QA_STAGE:?}
 dest="$stage/axe-2.2.0"
+if [[ -x "$dest/axe" && $("$dest/axe" --version) == v2.2.0 ]]; then exit 0; fi
 mkdir -p "$dest"
 archive="$dest/release.tgz"
 curl --fail --silent --show-error --location --retry 3 --proto '=https' --proto-redir '=https' 'https://github.com/cameroncooke/AXe/releases/download/v2.2.0/AXe-macOS-v2.2.0-universal.tar.gz' -o "$archive"
