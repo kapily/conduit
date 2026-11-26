@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
+trap 'echo "Device setup stopped at script line $LINENO" >&2' ERR
 [[ "${GITHUB_ACTIONS:-}" == true && "${RUNNER_ENVIRONMENT:-github-hosted}" == github-hosted ]] || { echo 'This script requires a fresh GitHub-hosted runner.' >&2; exit 1; }
 stage="${RUNNER_TEMP:?}/garden-qa"
 product="$stage/app-build"
@@ -38,8 +39,15 @@ print(max(runtimes,key=lambda r:tuple(map(int,r["version"].split("."))))["identi
   test -x "$ANDROID_HOME/platform-tools/adb" && test -x "$ANDROID_HOME/emulator/emulator"
   adb version
   emulator -accel-check
-  echo no | "$sdk_tools/avdmanager" create avd -n GardenQA -k 'system-images;android-35;google_apis;x86_64' --device pixel_7 > "$stage/avd.log"
-  emulator -list-avds | grep -Fx GardenQA >/dev/null
+  export ANDROID_USER_HOME="$stage/android-home"
+  export ANDROID_AVD_HOME="$stage/android-home/avd"
+  mkdir -p "$ANDROID_AVD_HOME"
+  printf 'ANDROID_USER_HOME=%s\nANDROID_AVD_HOME=%s\n' "$ANDROID_USER_HOME" "$ANDROID_AVD_HOME" >> "$GITHUB_ENV"
+  "$sdk_tools/avdmanager" create avd -n GardenQA -k 'system-images;android-35;google_apis;x86_64' --device pixel_7 -p "$ANDROID_AVD_HOME/GardenQA.avd" <<< no > "$stage/avd.log" 2>&1 || { tail -12 "$stage/avd.log"; exit 1; }
+  test -s "$ANDROID_AVD_HOME/GardenQA.ini"
+  test -s "$ANDROID_AVD_HOME/GardenQA.avd/config.ini"
+  echo 'Registered the dedicated GardenQA emulator.'
+
   ;;
  build-ios)
   export XCODE_XCCONFIG_FILE="$PWD/ios/Flutter/ArmOnly.xcconfig"
