@@ -67,7 +67,8 @@ def parse(raw):
         match = re.fullmatch(r'\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]', el.get('bounds', ''))
         permission_control = (package in ('com.android.permissioncontroller','com.google.android.permissioncontroller')
                               and el.get('resource-id','').endswith((':id/permission_deny_button',':id/permission_message')))
-        if el.tag == 'node' and (package == APP or permission_control) and match:
+        system_dialog = package == 'android' and el.get('resource-id') in ('android:id/alertTitle','android:id/aerr_close')
+        if el.tag == 'node' and (package == APP or permission_control or system_dialog) and match:
             x, y, x2, y2 = map(int, match.groups())
             if x2 > x and y2 > y:
                 parts = tuple(dict.fromkeys(t.strip() for t in
@@ -150,7 +151,14 @@ class Phone:
             self.last_hierarchy = False
             result = []
         self.last = result
-        permission = [n for n in result if n.package != APP]
+        if self.phase == 'chooser':
+            dialog=[n for n in result if n.package=='android']
+            title=any(n.exact("Pixel Launcher isn't responding", "Pixel Launcher isn’t responding") for n in dialog)
+            close=next((n for n in dialog if n.enabled and n.exact('Close app')),None)
+            if title and close:
+                self.tap(close)
+                return []
+        permission = [n for n in result if n.package.endswith('permissioncontroller')]
         if any(n.matches(r'(?:send you )?notifications') for n in permission):
             button = next((n for n in permission if n.exact("Don't allow", "Don’t allow", "Deny")), None)
             if button:

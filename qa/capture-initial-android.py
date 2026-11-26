@@ -62,3 +62,18 @@ with tarfile.open(archive,'w',format=tarfile.USTAR_FORMAT) as tar:
         if item.is_file():tar.add(item,arcname=name)
 subprocess.run(['openssl','cms','-encrypt','-binary','-aes-256-cbc','-outform','DER','-in',str(archive),'-out',str(Path(os.environ['RUNNER_TEMP'])/'android-first-screen.p7m'),str(Path(__file__).resolve().parent/'recipient.pem')],check=True)
 archive.unlink()
+
+# A newly booted Google APIs image can leave its stock launcher ANR over a
+# healthy Conduit. Dismiss only that exact Android-owned dialog after sealing.
+if 'android' in visible and probe:
+    tree=ET.fromstring(probe)
+    android_nodes=[n for n in tree.iter('node') if n.get('package')=='android']
+    exact_title=any(n.get('text','').replace('’',"'").casefold()=="pixel launcher isn't responding" for n in android_nodes)
+    if exact_title:
+        button=next((n for n in android_nodes if n.get('text','').casefold()=='close app'),None)
+        if button is not None:
+            box=re.fullmatch(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]',button.get('bounds',''))
+            if box:
+                x,y,x2,y2=map(int,box.groups())
+                shell('input','tap',str((x+x2)//2),str((y+y2)//2))
+                print('Dismissed the stock Pixel Launcher error over Conduit.',flush=True)
