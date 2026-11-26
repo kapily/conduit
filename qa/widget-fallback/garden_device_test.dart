@@ -18,11 +18,6 @@ const _answer = [
   'Check the soil again tomorrow.',
 ];
 
-class GardenBinding extends IntegrationTestWidgetsFlutterBinding {
-  @override
-  bool get registerTestTextInput => true;
-}
-
 Future<String> _control(String path) async {
   final client = HttpClient()..connectionTimeout = const Duration(seconds: 5);
   client.findProxy = (_) => 'DIRECT';
@@ -50,10 +45,13 @@ Future<String> _control(String path) async {
 }
 
 void main() {
-  GardenBinding();
+  IntegrationTestWidgetsFlutterBinding.ensureInitialized();
   testWidgets('real device pairs and reopens a garden checklist', (
     tester,
   ) async {
+    final input = tester.testTextInput;
+    final installedInput = !input.isRegistered;
+    if (installedInput) input.register();
     final testHandler = FlutterError.onError;
     final dispatcher = WidgetsBinding.instance.platformDispatcher;
     final platformHandler = dispatcher.onError;
@@ -174,6 +172,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 600));
       await _control('history');
     } finally {
+      if (installedInput) input.unregister();
       FlutterError.onError = testHandler;
       dispatcher.onError = platformHandler;
     }

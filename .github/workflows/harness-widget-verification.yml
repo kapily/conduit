@@ -83,9 +83,28 @@ jobs:
         run: bash ../tooling/qa/device.sh boot "${{ matrix.platform }}"
       - name: Start the isolated server and synthetic model
         run: python3 tooling/qa/fixture.py
+      - name: Restore pinned iOS compiler inputs and dependency object files
+        if: matrix.platform == 'ios'
+        id: ios_objects
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            conduit/ios/Pods
+            ~/Library/Developer/Xcode/DerivedData/*/SourcePackages
+            ~/Library/Developer/Xcode/DerivedData/*/Build/Intermediates.noindex/Pods.build
+          key: widget-objects-v1-${{ matrix.runner }}-3.50.0-${{ steps.revision.outputs.ref }}
       - name: Exercise the production widget tree on the device
         working-directory: conduit
         run: python3 ../tooling/qa/widget-fallback/hosted.py "${{ matrix.platform }}"
+      - name: Retain only CocoaPods, public Swift packages and Pods compiler objects for retries
+        if: always() && matrix.platform == 'ios' && steps.ios_objects.outputs.cache-hit != 'true' && steps.ios_objects.outcome == 'success'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            conduit/ios/Pods
+            ~/Library/Developer/Xcode/DerivedData/*/SourcePackages
+            ~/Library/Developer/Xcode/DerivedData/*/Build/Intermediates.noindex/Pods.build
+          key: ${{ steps.ios_objects.outputs.cache-primary-key }}
       - name: Seal verified device media for offline review
         if: always() && env.QA_STAGE != ''
         run: python3 tooling/qa/widget-fallback/seal.py "${{ matrix.platform }}"
