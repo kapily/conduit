@@ -127,6 +127,9 @@ jobs:
           key: ${{ steps.deps.outputs.cache-primary-key }}
       - name: Boot a clean phone and install the verified app
         run: cd conduit && bash ../tooling/qa/device.sh boot "${{ matrix.platform }}"
+      - name: Verify Android foreground and first-run controls with fixed labels
+        if: matrix.platform == 'android'
+        run: python3 tooling/qa/phone-status.py android initial
       - name: Start synthetic Harness and local model
         run: python3 tooling/qa/fixture.py
       - name: Exercise native and web workspaces, then seal verified media
@@ -138,6 +141,9 @@ jobs:
           path: ${{ runner.temp }}/${{ matrix.platform }}-review.p7m
           if-no-files-found: error
           retention-days: 2
+      - name: Check Android process health and known controls on failure
+        if: failure() && matrix.platform == 'android'
+        run: python3 tooling/qa/phone-status.py android failure
       - name: Seal limited build diagnostics
         if: failure()
         run: python3 tooling/qa/seal-diagnostics.py "${{ matrix.platform }}"
@@ -147,5 +153,16 @@ jobs:
         with:
           name: ${{ matrix.platform }}-build-diagnostics
           path: ${{ runner.temp }}/${{ matrix.platform }}-diagnostics.p7m
+          if-no-files-found: ignore
+          retention-days: 2
+      - name: Seal a synthetic app screenshot and hierarchy after successful pairing
+        if: failure()
+        run: python3 tooling/qa/seal-paired-failure.py "${{ matrix.platform }}"
+      - name: Stage encrypted post-pairing UI diagnostic
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ${{ matrix.platform }}-paired-diagnostic
+          path: ${{ runner.temp }}/${{ matrix.platform }}-paired-failure.p7m
           if-no-files-found: ignore
           retention-days: 2

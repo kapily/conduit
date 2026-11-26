@@ -11,12 +11,7 @@ case "$1-$2" in
  prepare-ios)
   test "$(uname -m)" = arm64
   xcodebuild -version
-  xcrun simctl list devicetypes | grep -F 'com.apple.CoreSimulator.SimDeviceType.iPhone-17)' >/dev/null
-  xcrun simctl list runtimes -j | python3 -c '
-import json,sys
-runtimes=[r for r in json.load(sys.stdin)["runtimes"] if r.get("isAvailable") and r["identifier"].startswith("com.apple.CoreSimulator.SimRuntime.iOS-") and r["version"].split(".")[0] in ("26","27")]
-print(max(runtimes,key=lambda r:tuple(map(int,r["version"].split("."))))["identifier"])
-' > "$stage/ios-runtime"
+  python3 ../tooling/qa/select-ios.py
   ;;
  prepare-android)
   available_kb=$(df -Pk "$stage" | awk 'NR==2 {print $4}')
@@ -67,7 +62,7 @@ print(max(runtimes,key=lambda r:tuple(map(int,r["version"].split("."))))["identi
   ;;
  boot-ios)
   test -f "$product/Conduit.app/Info.plist"
-  uid=$(xcrun simctl create 'Garden QA' com.apple.CoreSimulator.SimDeviceType.iPhone-17 "$(cat "$stage/ios-runtime")")
+  uid=$(cat "$stage/ios-device")
   xcrun simctl boot "$uid"
   xcrun simctl bootstatus "$uid" -b
   xcrun simctl status_bar "$uid" override --time 9:41 --batteryState charged --batteryLevel 100 --cellularBars 4 --wifiBars 3
@@ -76,7 +71,15 @@ print(max(runtimes,key=lambda r:tuple(map(int,r["version"].split("."))))["identi
   ;;
  boot-android)
   test -f "$product/Conduit.apk"
-  emulator -avd GardenQA -port 5554 -no-window -no-audio -no-snapshot -no-boot-anim -gpu software -accel on > "$stage/emulator.log" 2>&1 &
+  if [[ -x android/gradlew ]]; then (cd android && ./gradlew --stop) > "$stage/gradle-stop.log" 2>&1 || true; fi
+  df -Pk "$stage" | awk 'NR==2 {print "Free KiB before device boot:",$4}'
+  (
+   set +e
+   emulator -avd GardenQA -memory 2048 -cores 2 -port 5554 -no-window -no-audio -no-snapshot -no-boot-anim -gpu software -accel on > "$stage/emulator.log" 2>&1
+   status=$?
+   echo "$status" > "$stage/emulator.exit"
+   exit "$status"
+  ) &
   pid=$!
   echo "$pid" > "$stage/emulator.pid"
   uid=emulator-5554
@@ -86,6 +89,9 @@ print(max(runtimes,key=lambda r:tuple(map(int,r["version"].split("."))))["identi
    sleep 2
   done
   test "$(adb -s "$uid" shell getprop sys.boot_completed | tr -d '\r')" = 1
+  adb -s "$uid" shell svc power stayon true
+  adb -s "$uid" shell settings put system screen_off_timeout 1800000
+  adb -s "$uid" shell wm dismiss-keyguard
   adb -s "$uid" shell input keyevent 82
   adb -s "$uid" reverse tcp:43671 tcp:43671
   adb -s "$uid" install "$product/Conduit.apk" > /dev/null

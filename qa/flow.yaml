@@ -3,8 +3,12 @@ appId: app.cogwheel.conduit.debug
 - launchApp:
     clearState: true
 - extendedWaitUntil:
-    visible: ".*DeepSeek Harness.*"
+    visible: "(?is).*(Open WebUI|DeepSeek Harness).*"
     timeout: 45000
+- scrollUntilVisible:
+    element: "(?is).*DeepSeek Harness.*"
+    direction: DOWN
+    timeout: 15000
 - takeScreenshot: chooser
 - tapOn: ".*DeepSeek Harness.*"
 - assertVisible: "Connect"
@@ -14,6 +18,10 @@ appId: app.cogwheel.conduit.debug
     index: 1
 - inputText: "http://127.0.0.1:43671/"
 - pressKey: Enter
+- tapOn:
+    text: "(?i).*Launch token.*"
+    index: 1
+    optional: true
 - inputText: "__LOCAL_LAUNCH_TOKEN__"
 - pressKey: Enter
 - tapOn:
@@ -23,8 +31,9 @@ appId: app.cogwheel.conduit.debug
     text: Allow
     optional: true
 - extendedWaitUntil:
-    visible: "New Chat"
+    visible: "No conversations yet"
     timeout: 45000
+- takeScreenshot: paired-proof
 - startRecording: garden-session
 - tapOn:
     text: "New Chat"
