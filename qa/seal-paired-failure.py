@@ -17,8 +17,12 @@ device = os.environ.get('QA_DEVICE')
 if not device:
     sys.exit(0)
 try:
-    result = subprocess.run([os.environ['QA_MAESTRO'],'--device',device,'hierarchy'],
-                            capture_output=True, timeout=40, check=True)
+    if platform=='android':
+        subprocess.run(['adb','-s',device,'shell','uiautomator','dump','/data/local/tmp/garden-diagnostic.xml'],capture_output=True,check=True,timeout=25)
+        result=subprocess.run(['adb','-s',device,'shell','cat','/data/local/tmp/garden-diagnostic.xml'],capture_output=True,check=True,timeout=15)
+    else:
+        result = subprocess.run([os.environ['QA_MAESTRO'],'--device',device,'hierarchy'],
+                                capture_output=True, timeout=40, check=True)
 except (subprocess.SubprocessError,OSError):
     sys.exit(0)
 hierarchy = result.stdout.decode(errors='replace')

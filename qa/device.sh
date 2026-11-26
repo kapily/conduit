@@ -75,7 +75,7 @@ case "$1-$2" in
   df -Pk "$stage" | awk 'NR==2 {print "Free KiB before device boot:",$4}'
   (
    set +e
-   emulator -avd GardenQA -memory 2048 -cores 2 -port 5554 -no-window -no-audio -no-snapshot -no-boot-anim -gpu software -accel on > "$stage/emulator.log" 2>&1
+   emulator -avd GardenQA -memory 2048 -cores 2 -port 5554 -no-window -no-audio -no-snapshot -no-boot-anim -camera-back none -camera-front none -gpu swiftshader -feature -Vulkan -accel on > "$stage/emulator.log" 2>&1
    status=$?
    echo "$status" > "$stage/emulator.exit"
    exit "$status"
