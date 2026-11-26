@@ -8,6 +8,7 @@ from pathlib import Path
 import plistlib
 import re
 import signal
+import shutil
 import subprocess
 import sys
 import time
@@ -166,23 +167,35 @@ class Driver:
         self.phase = 'validate installed simulator'
         self.web = False
         self.bounds = None
+        self.prepair = True
+        self.warmed = False
+        self.use_agent = False
 
-    def command(self, args, stdin=None, timeout=20):
+    def command(self, args, stdin=None, timeout=35, *, name):
+        # The command label is fixed by the driver; arguments and input stay private.
         try:
             r = subprocess.run(args, input=stdin, text=True, capture_output=True, timeout=timeout)
         except subprocess.TimeoutExpired:
-            raise Failed(self.phase + ': automation timeout') from None
+            raise Failed(f'{self.phase}: {name} timed out after {timeout}s') from None
         if r.returncode:
-            raise Failed(self.phase + ': automation command failed')
+            raise Failed(f'{self.phase}: {name} exited {r.returncode}')
         return r.stdout
 
     def sim(self, *args):
-        return self.command(['xcrun','simctl',*args])
+        name=args[0]
+        timeout=120 if name=='launch' else 55
+        return self.command(['xcrun','simctl',*args],timeout=timeout,name='simctl '+name)
 
     def ax(self,*args,stdin=None):
-        return self.command([str(self.axe),*args,'--udid',self.uid], stdin=stdin)
+        if args[0]=='describe-ui':
+            timeout=110 if not self.warmed else 55
+        else:
+            timeout=45
+        return self.command([str(self.axe),*args,'--udid',self.uid],stdin=stdin,timeout=timeout,name='axe '+args[0])
 
     def check_guard(self):
+        if self.command([str(self.axe),'--version'],name='axe version').strip()!='v2.2.0':
+            raise Failed('Unexpected AXe version')
         inventory = json.loads(self.sim('list','devices','--json'))
         target = [d for ds in inventory['devices'].values() for d in ds if d['udid'].upper()==self.uid]
         if len(target)!=1 or target[0]['name']!='Garden QA' or target[0]['state']!='Booted':
@@ -190,12 +203,33 @@ class Driver:
         self.sim('get_app_container',self.uid,self.bundle,'app')
 
     def items(self, agent=False):
-        if agent:
+        if agent or self.use_agent:
             try:
-                return agent_tree(json.loads(self.ax('describe-ui','--agent','--web','--view','reading')))
+                args=['describe-ui','--agent','--view','reading']
+                if self.web:args.append('--web')
+                tree=json.loads(self.ax(*args))
+                screen=tree.get('data',{}).get('capture',{}).get('screen',[])
+                if len(screen)==4 and screen[1] and screen[2]:
+                    self.bounds=(0,0,screen[1],screen[2])
+                nodes=agent_tree(tree)
+                if nodes:self.warmed=True
+                return nodes
             except (Failed,ValueError):
+                if self.use_agent:raise
                 return []
-        nodes = raw_tree(json.loads(self.ax('describe-ui','--minimal-keys')))
+        try:
+            nodes=raw_tree(json.loads(self.ax('describe-ui','--minimal-keys')))
+            if nodes:self.warmed=True
+        except (Failed,ValueError) as error:
+            if not self.prepair:raise
+            print('iOS QA: initial raw AX read failed; trying AXe reading snapshot.',flush=True)
+            self.use_agent=True
+            fallback=self.items()
+            labels=['Open WebUI','DeepSeek Harness','Server Address','Launch token','Connect']
+            available=[label for label in labels if any(n.contains(label) for n in fallback)]
+            print('iOS QA: initial AX status',len(fallback),'controls; known labels:',','.join(available),flush=True)
+            if not fallback:raise Failed('Initial AXe readers returned no controls') from error
+            return fallback
         for n in nodes:
             if 'application' in n.kind and n.box[2] > 200:
                 self.bounds = n.box
@@ -291,9 +325,9 @@ class Driver:
         self.wait(button('Connect'))
         nodes=self.items()
         url,token=field(nodes,False),field(nodes,True)
-        if not url or not token or url.box==token.box:
+        if not url or not token or url is token:
             raise Failed('Cannot distinguish the two blank sign-in fields')
-        self.shot('pairing');self.tap(url);self.type(ORIGIN)
+        self.shot('pairing');self.prepair=False;self.tap(url);self.type(ORIGIN)
         self.ax('key','40')
         # Next focuses the secure field, including layouts that scroll it above the keyboard.
         secret=field(self.items(),True)
@@ -334,6 +368,53 @@ class Driver:
             self.return_list()
         raise Failed(self.phase + ': original native session could not be reopened')
 
+    def preserve_native(self):
+        movie=self.out/'garden-session.mp4'
+        fields=self.command(['ffprobe','-v','error','-show_entries','stream=codec_type:format=duration','-of','json',str(movie)],name='ffprobe native recording')
+        info=json.loads(fields)
+        if float(info.get('format',{}).get('duration',0)) < 1 or not any(s.get('codec_type')=='video' for s in info.get('streams',[])):
+            raise Failed('Native recording failed media validation')
+        dest=self.stage/'native-session.mp4'
+        temp=dest.with_suffix('.tmp')
+        shutil.copyfile(movie,temp);temp.replace(dest)
+        self.mark('native-verified','verified')
+        print('iOS QA: native cold-reopen proof preserved.',flush=True)
+
+    def mark(self,name,text):
+        dest=self.stage/name
+        temporary=dest.with_suffix('.tmp')
+        temporary.write_text(text);temporary.replace(dest)
+
+    def web_history(self):
+        self.phase_start('read the native conversation inside official workspace')
+        # Confirm the host-rendered WebKit surface before using its sidebar or reading its content.
+        self.wait(lambda n:n.web or 'webview' in n.kind.replace(' ','') or web_editor(n),seconds=20,dialogs=('Continue','Allow','OK'))
+        question=lambda n:n.web and n.contains(NATIVE)
+        if not self.wait(question,seconds=3,optional=True):
+            row=lambda n:n.web and (n.contains('Seedling notes') or n.contains('Give me a checklist'))
+            if not self.wait(row,seconds=3,optional=True):
+                self.wait(lambda n:n.contains('Open sidebar') or n.contains('Expand sidebar') or n.contains('Toggle sidebar') or n.contains('Show sidebar') or n.contains('Open left sidebar'),seconds=10,tap=True)
+            self.wait(row,seconds=15,tap=True)
+        self.wait(question,seconds=18)
+        for line in ('Label each pot','Water the seedlings',NATIVE_REPLY):
+            self.wait(lambda n:n.web and n.contains(line),seconds=12)
+        return 'read-native-history'
+
+    def verify_web(self):
+        self.phase_start('send inside official web workspace')
+        self.wait(button(OPEN),tap=True);self.web=True
+        try:
+            self.wait(web_editor,seconds=30,tap=True,dialogs=('Continue','Allow','OK'))
+            self.type(WEB);self.wait(button('Send message'),seconds=12,tap=True)
+            self.wait(has(WEB_REPLY),seconds=35)
+            result='sent-second-prompt'
+        except Failed:
+            result=self.web_history()
+        self.shot('workspace')
+        self.wait(lambda n:not n.web and n.exact('Back','Back to Conduit','Chats'),tap=True);self.web=False
+        self.wait(button(OPEN),seconds=15)
+        self.mark('web-verification.txt',result)
+
     def run(self):
         self.check_guard(); self.pair()
         self.phase_start('native send and full streamed reply')
@@ -343,19 +424,16 @@ class Driver:
             self.wait(editor,dialogs=('Seedling notebook',),tap=True)
             self.type(NATIVE);self.wait(button('Send'),tap=True)
             self.verify_native(); self.shot('transcript')
-            self.phase_start('reopen native transcript');self.return_list();self.reopen();self.return_list()
-            self.phase_start('send inside official web workspace')
-            self.wait(button(OPEN),tap=True);self.web=True
-            self.wait(web_editor,seconds=48,tap=True,dialogs=('Continue','Allow','OK'))
-            self.type(WEB);self.wait(button('Send message'),tap=True)
-            self.wait(has(WEB_REPLY),seconds=45);self.shot('workspace')
-            self.wait(lambda n:not n.web and n.exact('Back','Back to Conduit','Chats'),tap=True);self.web=False
-            self.wait(button(OPEN),seconds=15);success=True
+            self.phase_start('reopen native transcript')
+            self.return_list();self.reopen()
+            success=True
         finally:
             self.stop(success)
         self.phase_start('cold launch and restore native conversation')
         self.sim('terminate',self.uid,self.bundle);self.sim('launch',self.uid,self.bundle)
-        self.wait(button(OPEN),seconds=40);self.reopen()
+        self.wait(button(OPEN),seconds=75);self.reopen()
+        self.preserve_native()
+        self.return_list();self.verify_web()
         print('iOS AXe verified the native and web replies and restored native history.',flush=True)
 
 

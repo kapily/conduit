@@ -1,40 +1,94 @@
 #!/usr/bin/env python3
-import json,os,shutil,subprocess,sys,tarfile
+"""Exercise a clean remote phone and seal each verified piece of evidence privately."""
+import filecmp
+import json
+import os
 from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tarfile
+import time
 
-os.umask(0o077);src=Path(__file__).resolve().parent;stage=Path(os.environ['QA_STAGE'])
-assert os.environ.get('GITHUB_ACTIONS')=='true'
-logs=stage/'private-maestro';logs.mkdir()
-plat=sys.argv[1]
+os.umask(0o077)
+assert os.environ.get('GITHUB_ACTIONS') == 'true'
+platform=sys.argv[1]
+assert platform in ('android','ios')
+src=Path(__file__).resolve().parent
+stage=Path(os.environ['QA_STAGE'])
+logs=stage/'private-maestro'
+logs.mkdir()
 cert=src/'recipient.pem'
-certificate=cert.read_bytes()
-if b'PRIVATE KEY' in certificate or not certificate.startswith(b'-----BEGIN CERTIFICATE-----'):
- raise SystemExit('Expected a public X.509 recipient certificate.')
-def run(cmd,**kw):return subprocess.run(cmd,check=True,**kw)
-if plat=='android':
- run([sys.executable,str(src/'android-native-driver.py')],timeout=530)
- driver='Android platform tools / uiautomator'
-else:
- run(['bash',str(src/'install-ios-axe.sh')],timeout=150)
- run([sys.executable,str(src/'ios-axe-driver.py')],timeout=530)
- driver='AXe 2.2.0 / simctl'
-dest=stage/'verified';dest.mkdir()
-# Explicit allowlist. Maestro's implicit failure screenshots, control traces and session logs are private.
-for fname in ['chooser.png','pairing.png','transcript.png','workspace.png','garden-session.mp4']:
- matches=list(logs.rglob(fname))
- if len(matches)!=1 or matches[0].stat().st_size<1000:raise SystemExit('No unique verified output for '+fname)
- name=plat+'-'+fname
- if fname.endswith('.mp4'):
-  run(['ffmpeg','-hide_banner','-loglevel','error','-i',str(matches[0]),'-map','0:v:0','-an','-map_metadata','-1','-vf','scale=720:-2','-c:v','libx264','-crf','23','-preset','fast','-pix_fmt','yuv420p','-movflags','+faststart',str(dest/name)])
- else:shutil.copyfile(matches[0],dest/name)
-(dest/'verification.json').write_text(json.dumps({'platform':plat,'conduit_source':os.environ['QA_COMMIT'],'harness':'0.2.2-rc.5','ui_automation':driver,'native_chat':'sent and reopened after a cold launch','official_workspace':'sent a separate prompt, verified its unique streamed reply, and returned to native chats','manual_privacy_review':'pending'},indent=2))
-archive=stage/'unpublished.tar'
-with tarfile.open(archive,'w',format=tarfile.USTAR_FORMAT) as t:
- for f in sorted(dest.iterdir()):
-  info=t.gettarinfo(str(f),f.name);info.uid=info.gid=0;info.uname=info.gname='';info.mtime=0
-  with f.open('rb') as stream:t.addfile(info,stream)
-sealed=Path(os.environ['RUNNER_TEMP'])/(plat+'-review.p7m')
-run(['openssl','cms','-encrypt','-binary','-aes-256-cbc','-outform','DER','-in',str(archive),'-out',str(sealed),str(cert)])
-if sealed.stat().st_size<archive.stat().st_size:raise RuntimeError('Empty envelope.')
-archive.unlink()
-print('Device checks passed. The allowlisted media is encrypted for offline review.')
+if b'PRIVATE KEY' in cert.read_bytes() or not cert.read_bytes().startswith(b'-----BEGIN CERTIFICATE-----'):
+    raise SystemExit('Expected the public recipient certificate.')
+driver='Android platform tools / uiautomator' if platform=='android' else 'AXe 2.2.0 / simctl'
+web_results={
+    'sent-second-prompt': 'sent another prompt and verified the unique server reply in the official workspace',
+    'read-native-history': 'opened the persisted native question and its complete server reply in the official workspace',
+}
+def run(command,**options):
+    return subprocess.run(command,check=True,**options)
+
+def seal(native_only):
+    suffix='native-review' if native_only else 'review'
+    dest=stage/('verified-'+suffix)
+    dest.mkdir()
+    screens=['chooser.png','pairing.png','transcript.png']
+    if not native_only:screens.append('workspace.png')
+    for name in screens:
+        matches=list(logs.rglob(name))
+        if len(matches)!=1 or matches[0].stat().st_size<1000:
+            raise RuntimeError('Expected one non-empty verified screenshot for '+name)
+        shutil.copyfile(matches[0],dest/(platform+'-'+name))
+    marker=stage/'native-verified'
+    video=(stage/'native-session.mp4') if native_only else (logs/'garden-session.mp4')
+    if not marker.is_file() or not video.is_file() or video.stat().st_size<1000:
+        raise RuntimeError('The completed native scenario must provide its verified recording.')
+    video_name=platform+'-garden-session.mp4'
+    if not native_only and filecmp.cmp(video,stage/'native-session.mp4',shallow=False):
+        shutil.copyfile(stage/'verified-native-review'/video_name,dest/video_name)
+    else:
+        run(['nice','-n','12','ffmpeg','-nostdin','-hide_banner','-loglevel','error','-threads','1','-i',str(video),'-map','0:v:0','-an','-map_metadata','-1','-filter_threads','1','-vf','scale=720:-2','-c:v','libx264','-threads','1','-crf','23','-preset','fast','-pix_fmt','yuv420p','-movflags','+faststart',str(dest/video_name)])
+    result='pending'
+    if not native_only:
+        key=(stage/'web-verification.txt').read_text().strip()
+        result=web_results[key]
+    (dest/'verification.json').write_text(json.dumps({
+        'platform':platform,'conduit_source':os.environ['QA_COMMIT'],
+        'harness':'0.2.2-rc.5','ui_automation':driver,'native_chat':'sent, streamed and reopened after a cold launch',
+        'official_workspace':result,'manual_privacy_review':'pending'
+    },indent=2))
+    archive=stage/(suffix+'.tar')
+    with tarfile.open(archive,'w',format=tarfile.USTAR_FORMAT) as tar:
+        for item in sorted(dest.iterdir()):
+            info=tar.gettarinfo(str(item),item.name)
+            info.uid=info.gid=0;info.uname=info.gname='';info.mtime=0
+            with item.open('rb') as stream:tar.addfile(info,stream)
+    sealed=Path(os.environ['RUNNER_TEMP'])/(platform+'-'+suffix+'.p7m')
+    run(['openssl','cms','-encrypt','-binary','-aes-256-cbc','-outform','DER','-in',str(archive),'-out',str(sealed),str(cert)])
+    if sealed.stat().st_size<archive.stat().st_size:raise RuntimeError('Expected a sealed media bundle.')
+    archive.unlink()
+    print('Sealed verified '+suffix+' for private offline inspection.',flush=True)
+
+if platform=='ios':
+    run(['bash',str(src/'install-ios-axe.sh')],timeout=150)
+command=src/('android-native-driver.py' if platform=='android' else 'ios-axe-driver.py')
+proof=stage/'native-verified'
+process=subprocess.Popen([sys.executable,str(command)])
+deadline=time.monotonic()+(920 if platform=='ios' else 550)
+native_sealed=False
+try:
+    while True:
+        status=process.poll()
+        if proof.is_file() and not native_sealed:
+            seal(True)
+            native_sealed=True
+        if status is not None:break
+        if time.monotonic()>deadline:raise RuntimeError('Device scenario exceeded its deadline.')
+        time.sleep(.4)
+finally:
+    if process.poll() is None:process.terminate();process.wait(timeout=15)
+if process.returncode:
+    raise SystemExit('The later scenario did not complete.' if native_sealed else 'Device scenario failed before verified native history.')
+if not native_sealed:raise SystemExit('Missing completed native checkpoint.')
+seal(False)

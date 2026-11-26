@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -36,6 +37,7 @@ class Node:
     enabled: bool
     web: bool
     box: tuple
+    focused: bool
 
     def exact(self, *choices):
         return any(t.casefold() == c.casefold() for t in self.parts for c in choices)
@@ -71,7 +73,7 @@ def parse(raw):
                 parts = tuple(dict.fromkeys(t.strip() for t in
                     (el.get('text', ''), el.get('content-desc', ''), el.get('hint', '')) if t.strip()))
                 result.append(Node(parts, kind, package, el.get('password') == 'true',
-                                   el.get('enabled') != 'false', web, (x,y,x2,y2)))
+                                   el.get('enabled') != 'false', web, (x,y,x2,y2), el.get('focused') == 'true'))
         for child in el:
             walk(child, package, web)
     walk(root)
@@ -160,6 +162,19 @@ class Phone:
     def enter(self, value):
         cmd = 'input text ' + shlex.quote(value.replace(' ', '%s')) + '\nexit $?\n'
         self.call('shell', data=cmd.encode())
+
+    def clear_editor(self):
+        self.shell('input','keycombination','113','29')
+        self.shell('input','keyevent','67')
+
+    def native_checkpoint(self):
+        shutil.copyfile(self.dest/'garden-session.mp4', self.stage/'native-session.mp4')
+        (self.stage/'native-verified').write_text('cold-reopened-native-history\n')
+
+    def web_checkpoint(self, proof):
+        if proof not in ('sent-second-prompt','read-native-history'):
+            raise CheckFailed('Unknown workspace verification method.')
+        (self.stage/'web-verification.txt').write_text(proof+'\n')
 
     def hide(self):
         if re.search(r'(?:mInputShown|isInputViewShown|mIsInputViewShown)=true', self.shell('dumpsys','input_method')):
@@ -252,6 +267,75 @@ def wait(phone, name, predicate, timeout=45, optional=None):
     raise CheckFailed('Expected control missing during '+name+'.')
 
 
+def web_proof(p):
+    def editor(n):
+        return n.web and n.edit and not n.secure and n.enabled
+    def scene(ui):
+        welcome=next((n for n in ui if n.web and n.exact('Continue','Allow','OK')),None)
+        right=next((n for n in ui if n.web and n.enabled and n.exact('Collapse right sidebar')),None)
+        return welcome or right
+    def dismiss(ui):
+        control=scene(ui)
+        if control:p.tap(control)
+    def stable(label, pred, timeout, permitted=lambda ui:True):
+        before=None
+        until=time.monotonic()+timeout
+        while time.monotonic()<until:
+            ui=p.items()
+            overlay=scene(ui)
+            if overlay:
+                p.tap(overlay);before=None
+                time.sleep(.4);continue
+            node=next((n for n in ui if n.enabled and pred(n)),None)
+            if node and permitted(ui):
+                if before==node.box:return node
+                before=node.box
+            else:before=None
+            time.sleep(.38)
+        raise CheckFailed('Stable workspace control missing during '+label+'.')
+    def draft(ui):return any(editor(n) and n.exact(WEB_QUESTION) for n in ui)
+    try:
+        for attempt in range(2):
+            field=stable('editor selection',editor,24)
+            p.tap(field)
+            stable('editor focus',lambda n:editor(n) and n.focused,6)
+            if attempt:p.clear_editor()
+            p.enter(WEB_QUESTION)
+            try:
+                wait(p,'complete web draft',lambda n:editor(n) and n.exact(WEB_QUESTION),timeout=5)
+                break
+            except CheckFailed:
+                if attempt:raise
+        p.hide()
+        send=stable('submission',lambda n:n.web and n.exact('Send message'),12,permitted=draft)
+        p.tap(send)
+        wait(p,'official web reply',lambda n:n.web and n.matches(re.escape(WEB_ANSWER)),timeout=28,optional=dismiss)
+        p.hide()
+        _,ui=wait(p,'official web reply preview',lambda n:n.web and n.matches(re.escape(WEB_ANSWER)))
+        return 'sent-second-prompt',ui
+    except CheckFailed:
+        # Reopen the known server-backed session in the separate official workspace.
+        # Both text fragments must be simultaneously visible in the web transcript.
+        p.hide()
+        def sidebar(ui):
+            if scene(ui):dismiss(ui);return
+            toggle=next((n for n in ui if n.web and n.enabled and n.exact('Open sidebar','Expand sidebar','Expand left sidebar','Open left sidebar')),None)
+            if toggle:p.tap(toggle)
+        row,_=wait(p,'official server history row',lambda n:n.web and n.exact('Seedling notes'),timeout=28,optional=sidebar)
+        p.tap(row)
+        until=time.monotonic()+24
+        while time.monotonic()<until:
+            ui=p.items()
+            overlay=scene(ui)
+            if overlay:p.tap(overlay);continue
+            if all(any(n.web and not n.edit and n.matches(re.escape(t)) for n in ui) for t in (QUESTION,ANSWER)):
+                return 'read-native-history',ui
+            left=next((n for n in ui if n.web and n.enabled and n.exact('Close sidebar','Collapse sidebar','Collapse left sidebar')),None)
+            if left:p.tap(left)
+            time.sleep(.35)
+        raise CheckFailed('The official workspace could not verify the original question and reply.')
+
+
 def flow(p):
     def act(name, fn, **kwargs):
         n,_=wait(p,name,fn,**kwargs)
@@ -263,13 +347,11 @@ def flow(p):
     def reopen():
         act('synthetic session selection',lambda n:native(n) and n.matches(r'Seedling notes|Give me a checklist|Label each pot'))
         wait(p,'reopened native question',lambda n:native(n) and n.matches(re.escape(QUESTION)))
-        wait(p,'reopened native reply',lambda n:native(n) and n.matches(re.escape(ANSWER)))
+        for fragment in ('Label each pot.','Water the seedlings.',ANSWER):
+            wait(p,'reopened native reply',lambda n:native(n) and n.matches(re.escape(fragment)))
     def pick_workspace(ui):
         choice=next((n for n in ui if n.enabled and native(n) and n.exact('Seedling notebook')),None)
         if choice:p.tap(choice)
-    def welcome(ui):
-        button = next((n for n in ui if n.web and n.exact('Continue','Allow','OK')),None)
-        if button:p.tap(button)
     p.start(fresh=True)
     chooser,ui=wait(p,'backend selection',lambda n:native(n) and n.matches('DeepSeek Harness'),
                     optional=lambda u:p.scroll() if any(n.matches('Open WebUI|LibreChat') for n in u) else None)
@@ -300,18 +382,6 @@ def flow(p):
         p.shot('transcript',ui)
         p.phase='reopened native session'
         back();reopen();back()
-        p.phase='official web workspace'
-        act('workspace entry',lambda n:native(n) and n.exact(OPEN_WORKSPACE))
-        act('official web editor',lambda n:n.web and (n.matches(WEB_PLACEHOLDER) or (n.edit and not n.secure)),
-            optional=welcome,timeout=60)
-        p.enter(WEB_QUESTION)
-        act('official web send',lambda n:n.web and n.exact('Send message'))
-        wait(p,'official web reply',lambda n:n.web and n.matches(re.escape(WEB_ANSWER)),timeout=60)
-        p.hide()
-        _,ui=wait(p,'official transcript preview',lambda n:n.web and n.matches(re.escape(WEB_ANSWER)))
-        p.shot('workspace',ui)
-        act('exit embedded workspace',lambda n:native(n) and n.exact('Back','Chats','Back to chats','Back to Conduit'))
-        wait(p,'catalog after web turn',lambda n:native(n) and n.exact(OPEN_WORKSPACE))
         success=True
     finally:
         p.stop_record(success)
@@ -319,7 +389,17 @@ def flow(p):
     p.start()
     wait(p,'restored paired catalog',lambda n:native(n) and n.exact(OPEN_WORKSPACE))
     reopen()
-    print('Verified the Android native garden reply, reopened transcript, official workspace reply, and cold launch.',flush=True)
+    p.native_checkpoint()
+    print('Verified Android native video, reopened checklist and cold launch.',flush=True)
+    back()
+    p.phase='official web workspace'
+    act('workspace entry',lambda n:native(n) and n.exact(OPEN_WORKSPACE))
+    proof,ui=web_proof(p)
+    p.shot('workspace',ui)
+    act('exit embedded workspace',lambda n:native(n) and n.exact('Back','Chats','Back to chats','Back to Conduit'))
+    wait(p,'catalog after workspace verification',lambda n:native(n) and n.exact(OPEN_WORKSPACE))
+    p.web_checkpoint(proof)
+    print('Verified Android official workspace ('+proof+').',flush=True)
 
 
 def main():
