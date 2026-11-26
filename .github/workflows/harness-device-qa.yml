@@ -19,12 +19,12 @@ jobs:
     name: Verify ${{ matrix.platform }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - platform: ios
-            runner: xcode-27
-          - platform: android
-            runner: ubuntu-24.04
+      matrix: >-
+        ${{ fromJSON(
+          contains(github.event.head_commit.message, '[qa-ios]') && '{"include":[{"platform":"ios","runner":"xcode-27"}]}' ||
+          contains(github.event.head_commit.message, '[qa-android]') && '{"include":[{"platform":"android","runner":"ubuntu-24.04"}]}' ||
+          '{"include":[{"platform":"ios","runner":"xcode-27"},{"platform":"android","runner":"ubuntu-24.04"}]}'
+        ) }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 85
     env:

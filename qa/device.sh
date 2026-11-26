@@ -20,6 +20,13 @@ case "$1" in
   test -d "$app";xcrun simctl install "$uid" "$app"
   ;;
  android)
+  available_kb=$(df -Pk "$stage" | awk 'NR==2 {print $4}')
+  echo "Free space before installing the emulator and building: ${available_kb} KiB"
+  if (( available_kb < 18874368 )); then
+    for unused in /usr/share/dotnet /opt/ghc /usr/local/.ghcup; do
+      if [[ -d "$unused" ]]; then sudo rm -rf -- "$unused"; fi
+    done
+  fi
   test -c /dev/kvm; sudo setfacl -m "u:$(id -un):rw" /dev/kvm
   sdkmanager 'system-images;android-35;google_apis;x86_64' 'emulator' > "$stage/sdk.log"
   echo no | avdmanager create avd -n GardenQA -k 'system-images;android-35;google_apis;x86_64' --device pixel_7 > "$stage/avd.log"
