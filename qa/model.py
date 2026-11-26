@@ -31,9 +31,11 @@ class Endpoint(BaseHTTPRequestHandler):
         if body.get('model') != MODEL:
             self.send_error(400, 'Unknown demo model'); return
         prompts=[m.get('content','') for m in body.get('messages',[]) if m.get('role')=='user']
-        text=json.dumps(prompts[-1:]).lower()
+        last_user=json.dumps(prompts[-1:]).lower()
+        # Harness appends environment messages after the actual user question.
+        text=json.dumps(prompts).lower()
         system=' '.join(str(m.get('content','')) for m in body.get('messages',[]) if m.get('role')=='system').lower()
-        needs_title='title' in text or (not body.get('tools') and ('title' in system or 'summar' in system))
+        needs_title='title' in last_user or (not body.get('tools') and ('title' in system or 'summar' in system))
         if needs_title:
             answer='Arugula tray' if 'arugula' in text or 'arugula' in system else ANSWERS['title']
         elif 'arugula' in text:
