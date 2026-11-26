@@ -1,0 +1,209 @@
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:conduit/main.dart' as conduit;
+import 'package:conduit/shared/widgets/adaptive_route_shell.dart';
+import 'package:conduit/shared/widgets/adaptive_toolbar_components.dart';
+import 'package:conduit/shared/widgets/platform_ui/platform_ui.dart';
+import 'package:flutter/widgets.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:integration_test/integration_test.dart';
+
+const _origin = 'http://127.0.0.1:43671/';
+const _controlPort = 43673;
+const _question = 'Give me a checklist for a tray of basil seedlings.';
+const _answer = [
+  'Label each pot.',
+  'Water the seedlings.',
+  'Check the soil again tomorrow.',
+];
+
+Future<String> _control(String path) async {
+  final client = HttpClient()..connectionTimeout = const Duration(seconds: 5);
+  client.findProxy = (_) => 'DIRECT';
+  try {
+    final uri = Uri(
+      scheme: 'http',
+      host: '127.0.0.1',
+      port: _controlPort,
+      path: '/$path',
+    );
+    final request = await client.postUrl(uri);
+    request.followRedirects = false;
+    request.headers.set(
+      'X-Garden-Run',
+      const String.fromEnvironment('GARDEN_RUN'),
+    );
+    request.contentLength = 0;
+    final response = await request.close().timeout(const Duration(minutes: 3));
+    if (response.statusCode != 200)
+      throw StateError('Local garden controller rejected $path.');
+    return utf8.decoder.bind(response).join();
+  } finally {
+    client.close(force: true);
+  }
+}
+
+void main() {
+  IntegrationTestWidgetsFlutterBinding.ensureInitialized();
+  testWidgets('real iPhone creates and switches server workspaces', (
+    tester,
+  ) async {
+    final input = tester.testTextInput;
+    final installedInput = !input.isRegistered;
+    if (installedInput) input.register();
+    final testHandler = FlutterError.onError;
+    final testErrorWidgetBuilder = ErrorWidget.builder;
+    final dispatcher = WidgetsBinding.instance.platformDispatcher;
+    final platformHandler = dispatcher.onError;
+    final chooser = find.byKey(const Key('backend-chooser-deepseek-harness'));
+    final fields = find.byType(EditableText);
+    final composer = find.descendant(
+      of: find.byKey(const ValueKey('harness-message-field')),
+      matching: fields,
+    );
+    Future<void> until(bool Function() ready, String step) async {
+      final watch = Stopwatch()..start();
+      while (!ready() && watch.elapsed < const Duration(seconds: 60)) {
+        await tester.pump(const Duration(milliseconds: 150));
+      }
+      if (!ready()) throw StateError('Garden check did not reach $step.');
+    }
+
+    bool seen(String s) =>
+        find.textContaining(s, findRichText: true).evaluate().isNotEmpty;
+    Finder button(String label) => find.byWidgetPredicate(
+      (widget) =>
+          widget is AdaptiveButton &&
+          (widget.semanticLabel == label || widget.label == label) &&
+          widget.onPressed != null,
+    );
+    Future<void> press(String label) async {
+      final target = button(label);
+      await until(() => target.evaluate().isNotEmpty, label);
+      await tester.ensureVisible(target.first);
+      // The iOS native buttons may own their own PlatformView gesture surface.
+      // Dispatch its bound production action there, and tap real Flutter buttons elsewhere.
+      final native = find.descendant(
+        of: target.first,
+        matching: find.byType(UiKitView),
+      );
+      if (Platform.isIOS && native.evaluate().isNotEmpty) {
+        tester.widget<AdaptiveButton>(target.first).onPressed!();
+      } else {
+        await tester.tap(target.first);
+      }
+    }
+
+    try {
+      conduit.main();
+      await until(
+        () => chooser.evaluate().isNotEmpty,
+        'production backend chooser',
+      );
+      FlutterError.onError = testHandler;
+      dispatcher.onError = platformHandler;
+      await tester.ensureVisible(chooser);
+      await tester.tap(chooser);
+      await until(() => fields.evaluate().length == 2, 'pairing form');
+      final address = find.byWidgetPredicate(
+        (w) => w is EditableText && !w.obscureText,
+      );
+      final secret = find.byWidgetPredicate(
+        (w) => w is EditableText && w.obscureText,
+      );
+      if (secret.evaluate().length != 1 || address.evaluate().length != 1) {
+        throw StateError('The concealed token field was unavailable.');
+      }
+      await tester.enterText(address, _origin);
+      await tester.enterText(secret, await _control('credential'));
+      await press('Connect');
+      final opener = find.byKey(const ValueKey('harness-workspaces-button'));
+      final add = find.byKey(const ValueKey('harness-new-workspace'));
+      Future<void> tapFinding(Finder finder, String name) async {
+        await until(() => finder.evaluate().isNotEmpty, name);
+        await tester.ensureVisible(finder.first);
+        await tester.tap(finder.first);
+        await tester.pump(const Duration(milliseconds: 500));
+      }
+
+      Future<void> drawer() => tapFinding(opener, 'open workspace drawer');
+      Finder row(String value) => find.widgetWithText(AdaptiveListTile, value);
+      await until(
+        () =>
+            seen('Blue hour observing plan') &&
+            seen('Three crater sketches') &&
+            secret.evaluate().isEmpty,
+        'authenticated sky sessions',
+      );
+      await _control('paired');
+      await drawer();
+      await tapFinding(row('Lunar maps'), 'select existing lunar workspace');
+      await until(
+        () =>
+            seen('Three crater sketches') && !seen('Blue hour observing plan'),
+        'filtered lunar sessions',
+      );
+      await tester.pump(const Duration(milliseconds: 500));
+      await _control('selected');
+      await drawer();
+      await until(
+        () => add.evaluate().isNotEmpty && seen('Sky atlas'),
+        'workspace sidebar',
+      );
+      await _control('folders');
+      await tapFinding(add, 'new workspace');
+      await press('New Folder');
+      final folderName = find.byType(EditableText);
+      await until(() => folderName.evaluate().isNotEmpty, 'new folder name');
+      await tester.enterText(folderName.last, 'Meteor watch');
+      await press('Create');
+      await until(
+        () => seen('No subfolders'),
+        'newly created empty host directory',
+      );
+      await press('Use this folder');
+      await until(
+        () =>
+            seen('Meteor watch') &&
+            seen('No conversations yet') &&
+            !seen('Three crater sketches'),
+        'new selected workspace',
+      );
+      await press('New Chat');
+      await until(
+        () => composer.evaluate().isNotEmpty,
+        'workspace chat composer',
+      );
+      final shell = tester
+          .widgetList<AdaptiveRouteShell>(find.byType(AdaptiveRouteShell))
+          .last;
+      final back = shell.appBar?.leading;
+      if (back is! ConduitAdaptiveAppBarIconButton ||
+          back.semanticLabel != 'Chats' ||
+          back.onPressed == null)
+        throw StateError('Missing catalog navigation.');
+      back.onPressed!();
+      await until(
+        () => opener.evaluate().isNotEmpty,
+        'return to scoped catalog',
+      );
+      await drawer();
+      await until(
+        () =>
+            add.evaluate().isNotEmpty &&
+            seen('Sky atlas') &&
+            seen('Lunar maps') &&
+            seen('Meteor watch'),
+        'three workspace options',
+      );
+      await tester.pump(const Duration(milliseconds: 500));
+      await _control('verified');
+    } finally {
+      ErrorWidget.builder = testErrorWidgetBuilder;
+      if (installedInput) input.unregister();
+      FlutterError.onError = testHandler;
+      dispatcher.onError = platformHandler;
+    }
+  }, timeout: const Timeout(Duration(minutes: 7)));
+}

@@ -7,8 +7,11 @@ src=Path(__file__).resolve().parent
 stage=Path(os.environ['QA_STAGE']).resolve()
 stage.mkdir(parents=True,exist_ok=True)
 os.umask(0o077)
-home=stage/'harness-home'
-garden=stage/'garden'
+assert os.environ.get('GITHUB_ACTIONS')=='true' and os.environ.get('RUNNER_ENVIRONMENT')=='github-hosted'
+home=Path('/tmp/sky-notebooks')
+home.mkdir(mode=0o700)
+(stage/'workspace-home').write_text(str(home))
+garden=home/'Horizon notes'
 for p in (home/'profiles/web',home/'storages',garden,stage/'private-tmp'): p.mkdir(parents=True,exist_ok=True)
 assert not (home/'storages/workspace.json').exists(), 'Expected a fresh QA profile'
 (home/'profiles/web/cordis.patch.yml').write_text('''
@@ -40,9 +43,9 @@ assert not (home/'storages/workspace.json').exists(), 'Expected a fresh QA profi
 ''')
 key=uuid.uuid4().hex
 now=datetime.datetime.now(datetime.timezone.utc).isoformat()
-(home/'storages/workspace.json').write_text(json.dumps({'unit':{'name':'workspace','version':2},'global':{'initialized':True,'workspaceIds':[key],'defaultWorkspaceId':key,'archivedSessionIds':[],'pinnedSessionIds':[]},'tables':{'workspaces':{key:{'path':str(garden),'title':'Seedling notebook','createdAt':now,'updatedAt':now,'sessionIds':[]}}}}))
+(home/'storages/workspace.json').write_text(json.dumps({'unit':{'name':'workspace','version':2},'global':{'initialized':True,'workspaceIds':[key],'defaultWorkspaceId':key,'archivedSessionIds':[],'pinnedSessionIds':[]},'tables':{'workspaces':{key:{'path':str(garden),'title':'Horizon notes','createdAt':now,'updatedAt':now,'sessionIds':[]}}}}))
 def launch(name,cmd):
- env={'PATH':os.environ['PATH'],'HOME':str(home),'DSH_HOME':str(home),'TMPDIR':str(stage/'private-tmp'),'GARDEN_MODEL_KEY':secrets.token_hex(18),'DSH_PERMISSION_MODE':'read-only','DO_NOT_TRACK':'1','CI':'true','LANG':'en_US.UTF-8','NO_COLOR':'1','npm_config_cache':str(stage/'npm-cache')}
+ env={'PATH':os.environ['PATH'],'HOME':str(home),'DSH_HOME':str(home),'TMPDIR':str(stage/'private-tmp'),'GARDEN_MODEL_KEY':secrets.token_hex(18),'DSH_PERMISSION_MODE':'read-only','SSH_TTY':'/dev/pts/fixture','DO_NOT_TRACK':'1','CI':'true','LANG':'en_US.UTF-8','NO_COLOR':'1','npm_config_cache':str(stage/'npm-cache')}
  with (stage/(name+'.private.log')).open('wb') as log:
   p=subprocess.Popen(cmd,cwd=garden,env=env,stdout=log,stderr=log,stdin=subprocess.DEVNULL,start_new_session=True)
  (stage/(name+'.pid')).write_text(str(p.pid));return p

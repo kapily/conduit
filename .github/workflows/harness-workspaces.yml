@@ -1,0 +1,156 @@
+name: Verify mobile Harness workspaces
+on:
+  push:
+    branches: [codex/harness-workspace-device-qa]
+permissions:
+  contents: read
+jobs:
+  device:
+    strategy:
+      fail-fast: false
+      matrix: >-
+        ${{ fromJSON(
+          contains(github.event.head_commit.message, '[workspace-android]') && '{"include":[{"platform":"android","runner":"ubuntu-24.04"}]}' ||
+          contains(github.event.head_commit.message, '[workspace-ios]') && '{"include":[{"platform":"ios","runner":"macos-26"}]}' ||
+          '{"include":[{"platform":"android","runner":"ubuntu-24.04"},{"platform":"ios","runner":"macos-26"}]}'
+        ) }}
+    name: Workspace creation on ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 85
+    env:
+      QA_WIDGET_ONLY: ${{ matrix.platform == 'ios' && '1' || '0' }}
+      FLUTTER_SUPPRESS_ANALYTICS: true
+      COCOAPODS_DISABLE_STATS: true
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          path: tooling
+          persist-credentials: false
+      - id: revision
+        run: |
+          SHA=$(cat tooling/qa/source-commit)
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]]
+          echo "ref=$SHA" >> "$GITHUB_OUTPUT"
+          echo "QA_COMMIT=$SHA" >> "$GITHUB_ENV"
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ steps.revision.outputs.ref }}
+          path: conduit
+          persist-credentials: false
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
+        with:
+          flutter-version: '3.50.0'
+          channel: stable
+          cache: true
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.15.0'
+      - name: Install fixture and capture tools
+        run: bash tooling/qa/tools.sh
+      - name: Prepare a fresh hosted device
+        working-directory: conduit
+        run: bash ../tooling/qa/device.sh prepare "${{ matrix.platform }}"
+      - name: Restore verified build dependencies
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            conduit/ios/Pods
+            ~/Library/Caches/org.swift.swiftpm/repositories
+            ~/.gradle/caches/modules-2
+            ~/.gradle/wrapper/dists
+          key: garden-deps-v1-${{ matrix.runner }}-${{ hashFiles('conduit/pubspec.lock', 'conduit/ios/Podfile.lock', 'conduit/android/**/gradle-wrapper.properties', 'conduit/ios/**/Package.resolved') }}
+      - name: Generate the pinned app and workspace packages
+        working-directory: conduit
+        run: dart tool/setup_worktree.dart
+      - name: Prepare public CocoaPods compiler input
+        if: matrix.platform == 'ios'
+        working-directory: conduit
+        run: |
+          python3 ../tooling/qa/ort_cache.py restore ../tooling/inputs/ort-1.22.0.tgz "$QA_STAGE/cocoapods-cache"
+          echo "CP_CACHE_DIR=$QA_STAGE/cocoapods-cache" >> "$GITHUB_ENV"
+          echo "XCODE_XCCONFIG_FILE=$PWD/ios/Flutter/ArmOnly.xcconfig" >> "$GITHUB_ENV"
+      - name: Lookup exact Android build for the selected revision
+        if: matrix.platform == 'android'
+        id: original_android
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ runner.temp }}/garden-qa/app-build
+          key: garden-app-v1-${{ matrix.runner }}-flutter-3.50.0-${{ steps.revision.outputs.ref }}
+      - name: Build original Android app before booting the emulator
+        if: matrix.platform == 'android' && steps.original_android.outputs.cache-hit != 'true'
+        working-directory: conduit
+        run: bash ../tooling/qa/device.sh build android
+      - name: Preserve the exact Android product before device boot
+        if: matrix.platform == 'android' && steps.original_android.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ runner.temp }}/garden-qa/app-build
+          key: ${{ steps.original_android.outputs.cache-primary-key }}
+      - name: Boot the disposable verification device
+        working-directory: conduit
+        run: bash ../tooling/qa/device.sh boot "${{ matrix.platform }}"
+      - name: Start the isolated server and synthetic model
+        run: |
+          python3 tooling/qa/fixture.py
+          python3 tooling/qa/workspaces/seed.py
+      - name: Restore pinned iOS compiler inputs and dependency object files
+        if: matrix.platform == 'ios'
+        id: ios_objects
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            conduit/ios/Pods
+            ~/Library/Developer/Xcode/DerivedData/*/SourcePackages
+            ~/Library/Developer/Xcode/DerivedData/*/Build/Intermediates.noindex/Pods.build
+          key: widget-objects-v1-${{ matrix.runner }}-3.50.0-${{ steps.revision.outputs.ref }}
+          restore-keys: |
+            widget-objects-v1-${{ matrix.runner }}-3.50.0-
+      - name: Exercise workspace creation and filtering on the installed app
+        working-directory: conduit
+        run: python3 ../tooling/qa/workspaces/${{ matrix.platform }}.py ${{ matrix.platform }}
+      - name: Verify the server's real session ownership and seal the screenshots
+        run: |
+          python3 tooling/qa/workspaces/verify_server.py
+          python3 tooling/qa/workspaces/seal.py ${{ matrix.platform }}
+      - name: Retain only CocoaPods, public Swift packages and Pods compiler objects for retries
+        if: always() && matrix.platform == 'ios' && steps.ios_objects.outputs.cache-hit != 'true' && steps.ios_objects.outcome == 'success'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            conduit/ios/Pods
+            ~/Library/Developer/Xcode/DerivedData/*/SourcePackages
+            ~/Library/Developer/Xcode/DerivedData/*/Build/Intermediates.noindex/Pods.build
+          key: ${{ steps.ios_objects.outputs.cache-primary-key }}
+      - name: Stage encrypted workspace screenshots for private review
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: workspace-${{ matrix.platform }}-review
+          path: ${{ runner.temp }}/workspace-${{ matrix.platform }}-review.p7m
+          if-no-files-found: error
+          retention-days: 2
+      - name: Seal post-authentication diagnostic on device failure
+        if: failure() && env.QA_STAGE != ''
+        run: python3 tooling/qa/workspaces/diagnostic.py ${{ matrix.platform }}
+      - name: Stage sealed failure evidence
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: workspace-${{ matrix.platform }}-diagnostic
+          path: ${{ runner.temp }}/workspace-${{ matrix.platform }}-diagnostic.p7m
+          if-no-files-found: ignore
+          retention-days: 2
+      - name: Keep fully verified workspace switching if a later assertion failed
+        if: failure() && env.QA_STAGE != ''
+        run: python3 tooling/qa/workspaces/seal.py ${{ matrix.platform }} --switch-only
+      - name: Stage independently verified switch evidence
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: workspace-${{ matrix.platform }}-switch-review
+          path: ${{ runner.temp }}/workspace-${{ matrix.platform }}-switch-review.p7m
+          if-no-files-found: ignore
+          retention-days: 2
