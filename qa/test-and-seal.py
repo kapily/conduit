@@ -6,9 +6,6 @@ os.umask(0o077);src=Path(__file__).resolve().parent;stage=Path(os.environ['QA_ST
 assert os.environ.get('GITHUB_ACTIONS')=='true'
 logs=stage/'private-maestro';logs.mkdir()
 plat=sys.argv[1]
-token=(stage/'token.private').read_text().strip()
-flow=stage/'flow.private.yaml'
-if plat=='ios':flow.write_text((src/'flow.yaml').read_text().replace('__LOCAL_LAUNCH_TOKEN__',token))
 cert=src/'recipient.pem'
 certificate=cert.read_bytes()
 if b'PRIVATE KEY' in certificate or not certificate.startswith(b'-----BEGIN CERTIFICATE-----'):
@@ -18,11 +15,9 @@ if plat=='android':
  run([sys.executable,str(src/'android-native-driver.py')],timeout=530)
  driver='Android platform tools / uiautomator'
 else:
- with (stage/'private-maestro.log').open('w') as out:
-  p=subprocess.run([os.environ['QA_MAESTRO'],'--device',os.environ['QA_DEVICE'],'test','--test-output-dir',str(logs),str(flow)],stdout=out,stderr=out,timeout=590)
- if p.returncode:
-  raise SystemExit('iOS device scenario failed. The sanitized command excerpt is encrypted.')
- driver='Maestro 2.12.1'
+ run(['bash',str(src/'install-ios-axe.sh')],timeout=150)
+ run([sys.executable,str(src/'ios-axe-driver.py')],timeout=530)
+ driver='AXe 2.2.0 / simctl'
 dest=stage/'verified';dest.mkdir()
 # Explicit allowlist. Maestro's implicit failure screenshots, control traces and session logs are private.
 for fname in ['chooser.png','pairing.png','transcript.png','workspace.png','garden-session.mp4']:
@@ -41,5 +36,5 @@ with tarfile.open(archive,'w',format=tarfile.USTAR_FORMAT) as t:
 sealed=Path(os.environ['RUNNER_TEMP'])/(plat+'-review.p7m')
 run(['openssl','cms','-encrypt','-binary','-aes-256-cbc','-outform','DER','-in',str(archive),'-out',str(sealed),str(cert)])
 if sealed.stat().st_size<archive.stat().st_size:raise RuntimeError('Empty envelope.')
-flow.unlink(missing_ok=True);archive.unlink()
+archive.unlink()
 print('Device checks passed. The allowlisted media is encrypted for offline review.')

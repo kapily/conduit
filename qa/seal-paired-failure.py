@@ -21,7 +21,7 @@ try:
         subprocess.run(['adb','-s',device,'shell','uiautomator','dump','/data/local/tmp/garden-diagnostic.xml'],capture_output=True,check=True,timeout=25)
         result=subprocess.run(['adb','-s',device,'shell','cat','/data/local/tmp/garden-diagnostic.xml'],capture_output=True,check=True,timeout=15)
     else:
-        result = subprocess.run([os.environ['QA_MAESTRO'],'--device',device,'hierarchy'],
+        result = subprocess.run([str(stage/'axe-2.2.0/axe'),'describe-ui','--minimal-keys','--udid',device],
                                 capture_output=True, timeout=40, check=True)
 except (subprocess.SubprocessError,OSError):
     sys.exit(0)

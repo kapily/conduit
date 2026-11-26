@@ -2,15 +2,6 @@
 set -euo pipefail
 stage="${RUNNER_TEMP:?}/garden-tools"
 mkdir -p "$stage"
-if [[ "$RUNNER_OS" == macOS ]]; then
- url='https://github.com/mobile-dev-inc/Maestro/releases/download/cli-2.12.1/maestro.zip'
- curl -fsSL --retry 3 "$url" -o "$stage/maestro.zip"
- echo "54dbb0716425626604973cbb374c585ca30272375d9ce15177a1152765ddd9d7  $stage/maestro.zip" | shasum -a 256 -c - >/dev/null
- unzip -q "$stage/maestro.zip" -d "$stage"
- maestro=$(find "$stage" -type f -path '*/bin/maestro' -print -quit)
- chmod +x "$maestro"
- echo "QA_MAESTRO=$maestro" >> "$GITHUB_ENV"
-fi
 npm install --prefix "$stage/harness" --no-audit --no-fund --loglevel=error @deepseek-ai/dsh@0.2.2-rc.5 > "$stage/npm.log" 2>&1
 echo "QA_DSH=$stage/harness/node_modules/.bin/dsh" >> "$GITHUB_ENV"
 if ! command -v ffmpeg >/dev/null;then
