@@ -1,0 +1,101 @@
+name: Verify retained iOS Harness session
+on:
+  push:
+    branches: [codex/deepseek-harness-device-qa]
+jobs:
+  restored:
+    if: contains(github.event.head_commit.message, '[qa-restored]')
+    runs-on: xcode-27
+    timeout-minutes: 85
+    permissions:
+      contents: read
+    env:
+      FLUTTER_SUPPRESS_ANALYTICS: true
+      COCOAPODS_DISABLE_STATS: true
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          path: tooling
+          persist-credentials: false
+      - id: rev
+        run: |
+          SHA=$(cat tooling/qa/source-commit)
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]]
+          echo "ref=$SHA" >> "$GITHUB_OUTPUT"
+          echo "QA_COMMIT=$SHA" >> "$GITHUB_ENV"
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ steps.rev.outputs.ref }}
+          path: conduit
+          persist-credentials: false
+      - name: Restore exact unmodified app
+        id: original
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ runner.temp }}/garden-qa/app-build
+          key: garden-app-v1-xcode-27-flutter-3.50.0-${{ steps.rev.outputs.ref }}
+          fail-on-cache-miss: true
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
+        with:
+          channel: stable
+          flutter-version: '3.50.0'
+          cache: true
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.15.0'
+      - name: Install the public fixture and media tools
+        run: bash tooling/qa/tools.sh
+      - name: Create a fresh synthetic iOS device
+        working-directory: conduit
+        run: bash ../tooling/qa/device.sh prepare ios
+      - name: Restore verified compiler prerequisites
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            conduit/ios/Pods
+            ~/Library/Caches/org.swift.swiftpm/repositories
+            ~/.gradle/caches/modules-2
+            ~/.gradle/wrapper/dists
+          key: garden-deps-v1-xcode-27-${{ hashFiles('conduit/pubspec.lock', 'conduit/ios/Podfile.lock', 'conduit/android/**/gradle-wrapper.properties', 'conduit/ios/**/Package.resolved') }}
+      - name: Generate app and packages
+        working-directory: conduit
+        run: dart tool/setup_worktree.dart
+      - name: Use the pinned public CocoaPods inputs
+        working-directory: conduit
+        run: |
+          python3 ../tooling/qa/ort_cache.py restore ../tooling/inputs/ort-1.22.0.tgz "$QA_STAGE/cocoapods-cache"
+          echo "CP_CACHE_DIR=$QA_STAGE/cocoapods-cache" >> "$GITHUB_ENV"
+          echo "XCODE_XCCONFIG_FILE=$PWD/ios/Flutter/ArmOnly.xcconfig" >> "$GITHUB_ENV"
+      - name: Boot this single device and install the unmodified app
+        working-directory: conduit
+        run: bash ../tooling/qa/device.sh boot ios
+      - name: Start the isolated Harness fixture
+        run: python3 tooling/qa/fixture.py
+      - name: Pair and verify a fresh native server session in the actual widget tree
+        id: widget
+        continue-on-error: true
+        working-directory: conduit
+        run: python3 ../tooling/qa/widget-handoff/hosted.py ios
+      - name: Verify the native receipts and restore the original app in the retained container
+        run: python3 tooling/qa/widget-handoff/retain.py
+      - name: Verify cold app launch and official workspace via native XCTest
+        run: python3 tooling/qa/xctest/ios-xctest-driver.py --restored
+      - name: Seal independently verified restored-session evidence
+        if: always() && env.QA_STAGE != ''
+        run: python3 tooling/qa/xctest/seal-restored.py
+      - name: Stage encrypted native restoration evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ios-restored-native
+          path: ${{ runner.temp }}/ios-restored-native.p7m
+          if-no-files-found: ignore
+          retention-days: 2
+      - name: Stage encrypted native and WebKit restoration evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ios-restored-review
+          path: ${{ runner.temp }}/ios-restored-review.p7m
+          if-no-files-found: ignore
+          retention-days: 2

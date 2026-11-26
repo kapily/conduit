@@ -244,8 +244,12 @@ final class HarnessMobileUITests: XCTestCase {
 
 
     private func verifyNative() throws {
-        _ = try control(question, in: conduit, exact: false, seconds: 35)
-        for answer in answers { _ = try control(answer, in: conduit, exact: false, seconds: 45) }
+        let all = [question] + answers
+        if until(32, { all.allSatisfy { find($0, in: conduit) != nil } ? conduit : nil }) != nil { return }
+        // Some Flutter Markdown trees flatten static text. Verify what the simulator actually rendered.
+        guard try bridge("native-visible") == "verified" else {
+            throw FixtureFailure.missingControl("complete native prompt and three-line checklist")
+        }
     }
 
     private func nativeComposer() throws -> XCUIElement {
@@ -321,6 +325,81 @@ final class HarnessMobileUITests: XCTestCase {
         try waitCatalog()
         try bridge(sent ? "web-sent" : "web-history")
     }
+
+    private func restoreWebHistory() throws {
+        let web = conduit.webViews.firstMatch
+        guard web.waitForExistence(timeout: 45) else {
+            throw FixtureFailure.missingControl("restored official WebKit workspace")
+        }
+        let all = [question] + answers
+        func webHasHistory() -> Bool {
+            all.allSatisfy { find($0, in: web) != nil }
+        }
+        func menu() -> XCUIElement? {
+            let labels = ["Expand sidebar", "Open left sidebar", "Open sidebar", "Toggle left sidebar", "Toggle sidebar", "Show sidebar", "Show sessions", "Search sessions"]
+            return labels.compactMap { find($0, in: web, tap: true) }.first
+        }
+        var selected = false
+        let row = until(18) {
+            dialog()
+            if let notice = find("Continue", in: web, exact: true, tap: true) { notice.tap() }
+            return find("Seedling notes", in: web, exact: true, tap: true)
+        }
+        if let row { row.tap(); selected = true }
+        if !selected && !webHasHistory(), let open = menu() {
+            open.tap()
+            // On narrow hosts the workspace itself can start collapsed.
+            if find("Seedling notes", in: web, exact: true, tap: true) == nil,
+               let folder = find("Seedling notebook", in: web, exact: true, tap: true) {
+                folder.tap()
+            }
+            let saved = try control("Seedling notes", in: web, exact: false, tap: true, seconds: 25)
+            saved.tap()
+            selected = true
+        }
+        if until(28, { webHasHistory() ? web : nil }) == nil {
+            // The browser bounds exclude any native shell/session title from visual evidence.
+            let frame = web.frame.intersection(conduit.frame)
+            let screen = conduit.frame
+            guard screen.width > 0, screen.height > 0, !frame.isEmpty else {
+                throw FixtureFailure.missingControl("visible WebKit viewport")
+            }
+            let coordinates = [Double((frame.minX-screen.minX)/screen.width),
+                               Double(1-(frame.maxY-screen.minY)/screen.height),
+                               Double(frame.width/screen.width), Double(frame.height/screen.height)]
+            let region = String(data: try JSONEncoder().encode(coordinates), encoding: .utf8) ?? ""
+            guard try bridge("restored-web-visible", details: region) == "verified" else {
+                throw FixtureFailure.missingControl("saved transcript and complete response inside WebKit")
+            }
+        }
+        try bridge(selected ? "restored-web-selected" : "restored-web-already-open")
+    }
+
+    func testRestoredConduit() throws {
+        // The fixture has enrolled this device through Conduit's normal controller.
+        // No keyboard entry or new Harness session is used in this scenario.
+        conduit.activate()
+        if find("New Chat", in: conduit, exact: true, tap: true) == nil,
+           let back = find("Chats", in: conduit, exact: true, tap: true) { back.tap() }
+        _ = try control("New Chat", in: conduit, tap: true, seconds: 55)
+        _ = try control("Seedling notes", in: conduit, tap: true, seconds: 45)
+        try bridge("restored-restart")
+        conduit.activate()
+        _ = try control("New Chat", in: conduit, tap: true, seconds: 60)
+        let saved = try control("Seedling notes", in: conduit, tap: true, seconds: 45)
+        saved.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        try verifyNative()
+        try bridge("restored-native")
+        try bridge("restored-open-web")
+        try control("Open Harness workspace", in: conduit, tap: true).tap()
+        try restoreWebHistory()
+        try control("Back", in: conduit, tap: true).tap()
+        guard until(20, {
+            !conduit.webViews.firstMatch.exists && find("Chats", in: conduit, exact: true, tap: true) != nil ? conduit : nil
+        }) != nil else { throw FixtureFailure.missingControl("returned native transcript") }
+        try bridge("restored-finished")
+    }
+
 
     func testInstalledConduit() throws {
         try pair()

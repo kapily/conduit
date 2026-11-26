@@ -16,6 +16,7 @@ permissions:
   contents: read
 jobs:
   phone:
+    if: "!contains(github.event.head_commit.message, '[qa-restored]')"
     name: Verify ${{ matrix.platform }}
     strategy:
       fail-fast: false

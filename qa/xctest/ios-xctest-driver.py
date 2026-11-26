@@ -2,6 +2,7 @@
 """Host-only runner for the independent native XCTest against the cached Conduit simulator app."""
 from __future__ import annotations
 import hmac
+import hashlib
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 import os
@@ -115,9 +116,45 @@ class Scenario:
             return b'ok'
         return token
 
+    def native_visible(self):
+        if not self.issued or self.clipboard_pending or self.position not in (6,8):
+            raise ValueError('not checking confirmed native conversation')
+        return self.ocr_visible(self.stage/'private-xctest')
+
+    def ocr_visible(self,private,region=None):
+        image=private/'native-ocr.png';script=private/'VerifyVisible.swift'
+        script.write_text(r'''import Foundation
+import Vision
+let request = VNRecognizeTextRequest()
+request.recognitionLevel = .accurate
+request.recognitionLanguages = ["en-US"]
+if CommandLine.arguments.count == 6 {
+    let v = CommandLine.arguments.dropFirst(2).compactMap { Double($0) }
+    guard v.count == 4 else { exit(1) }
+    request.regionOfInterest = CGRect(x: v[0], y: v[1], width: v[2], height: v[3])
+}
+let handler = VNImageRequestHandler(url: URL(fileURLWithPath: CommandLine.arguments[1]))
+do {
+    try handler.perform([request])
+    let lines = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
+    func normalize(_ text: String) -> String {
+        text.lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted).filter{ !$0.isEmpty }.joined(separator: " ")
+    }
+    let text = normalize(lines.joined(separator: " "))
+    let expected = ["Give me a checklist for a tray of basil seedlings", "Label each pot", "Water the seedlings", "Check the soil again tomorrow"]
+    print(expected.allSatisfy{ text.contains(normalize($0)) } ? "verified" : "incomplete")
+} catch { print("incomplete") }
+''')
+        try:
+            self.sim('io',self.uid,'screenshot',str(image))
+            proof=subprocess.run(['xcrun','--sdk','macosx','swift',str(script),str(image),*(str(n) for n in (region or []))],capture_output=True,timeout=58)
+            return b'verified' if proof.returncode==0 and proof.stdout.strip()==b'verified' else b'incomplete'
+        finally:image.unlink(missing_ok=True)
+
     def action(self,name,body=''):
         with self.lock:
             if self.finished:raise ValueError('finished')
+            if name=='native-visible':return self.native_visible()
             if name.startswith('prepair-'):return self.prepair(name[8:],body)
             if name=='clear-clipboard' and self.issued and self.position==4:
                 self.clipboard(b'');self.clipboard_pending=False;return b'ok'
@@ -145,6 +182,113 @@ class Scenario:
             self.last_checkpoint=name
             print('iOS XCTest checkpoint:',name,flush=True)
             return answer
+
+
+class RestoredScenario(Scenario):
+    """A read-only, independently seeded run; this bridge has no pairing/token endpoints."""
+    def __init__(self,stage,uid):
+        super().__init__(stage,uid)
+        self.out=stage/'restored-evidence'
+        self.out.mkdir(mode=0o700)
+        self.private=stage/'private-restored-xctest'
+        self.recording_name=None
+        self.position=0
+        self.checks=[]
+        self.model_selection=None
+        self.fingerprints={}
+        self.ios_runtime=''
+        self.commit=os.environ.get('QA_COMMIT','')
+        if not re.fullmatch('[0-9a-f]{40}',self.commit):raise ValueError('Missing tested source SHA')
+
+    def ensure_cached_product(self,installed,cached,payload):
+        choices=[payload,'Frameworks/App.framework/App','Frameworks/App.framework/flutter_assets/kernel_blob.bin']
+        if not (cached/choices[1]).is_file() and not (cached/choices[2]).is_file():
+            raise ValueError('Expected compiled cached Flutter product')
+        for item in choices:
+            if not (cached/item).is_file():continue
+            current=digest(installed/item)
+            if current!=digest(cached/item):raise ValueError('Installed app differs from the cached product')
+            self.fingerprints[item]=current
+
+    def clip(self,name):
+        self.recording_name=name
+        self.recorder=subprocess.Popen(['xcrun','simctl','io',self.uid,'recordVideo','--codec=h264',str(self.out/name)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        time.sleep(.8)
+        if self.recorder.poll() is not None:raise ValueError('Recorder did not start')
+
+    def closeclip(self):
+        self.stop()
+        path=self.out/self.recording_name
+        p=subprocess.run(['ffprobe','-v','error','-show_entries','stream=codec_type:format=duration','-of','json',str(path)],check=True,capture_output=True,timeout=30)
+        media=json.loads(p.stdout)
+        if not any(s.get('codec_type')=='video' for s in media['streams']) or float(media['format']['duration'])<1:raise ValueError('Missing verified movie')
+        self.recording_name=None
+
+    def restart(self):
+        bundle='app.cogwheel.conduit.debug'
+        def launch_pid():
+            out=subprocess.check_output(['xcrun','simctl','launch',self.uid,bundle],timeout=90,stderr=subprocess.DEVNULL).decode()
+            found=re.search(r':\s*([1-9][0-9]*)\s*$',out)
+            if not found:raise ValueError('No installed-app process identity')
+            return int(found.group(1))
+        before=launch_pid()
+        self.clip('ios-cold-restore.mp4')
+        self.sim('terminate',self.uid,bundle)
+        after=launch_pid()
+        if before==after:raise ValueError('New Conduit process not established')
+
+    def receipt(self,name,files):
+        docs={
+            'scenario':'independently enrolled Harness connection and existing synthetic Seedling notes session',
+            'conduit_source':self.commit,'app_bundle':'app.cogwheel.conduit.debug','runtime':self.ios_runtime,
+            'cached_product_sha256':self.fingerprints,'harness':'0.2.2-rc.5','automation':'Apple XCTest and simctl',
+            'os_process_restart':'simctl terminate then launch; verified distinct process IDs',
+            'verified_checks':self.checks,'official_workspace_session':self.model_selection,
+            'files':{file:digest(self.out/file) for file in files},
+            'privacy_review':'pending offline review','github_run':os.environ.get('GITHUB_RUN_ID','')
+        }
+        output=self.out/name;temp=output.with_suffix('.tmp')
+        temp.write_text(json.dumps(docs,indent=2)+'\n');temp.replace(output)
+
+    def action(self,name,body=''):
+        with self.lock:
+            if self.finished:raise ValueError('finished')
+            if name=='native-visible' and self.position==1:return self.ocr_visible(self.private)
+            if name=='restored-web-visible' and self.position==3:
+                region=json.loads(body)
+                if not isinstance(region,list) or len(region)!=4 or not all(isinstance(x,(int,float)) and 0<=x<=1 for x in region) or min(region[2:])<=0 or region[0]+region[2]>1.002 or region[1]+region[3]>1.002:raise ValueError('invalid WebKit region')
+                return self.ocr_visible(self.private,region)
+            expected=('restored-restart','restored-native','restored-open-web','web-proof','restored-finished')
+            key='web-proof' if name in ('restored-web-selected','restored-web-already-open') else name
+            if self.position>=len(expected) or key!=expected[self.position]:raise ValueError('invalid restored stage')
+            if name=='restored-restart':
+                self.restart()
+                self.checks.append('existing app terminated and relaunched as a new process')
+            elif name=='restored-native':
+                self.shot('ios-native-restored');self.closeclip()
+                self.checks.append('native saved title opened after process restart; original prompt and all three reply items verified')
+                self.receipt('native-provenance.json',['ios-native-restored.png','ios-cold-restore.mp4'])
+            elif name=='restored-open-web':self.clip('ios-workspace-restore.mp4')
+            elif key=='web-proof':
+                self.shot('ios-workspace-restored')
+                self.model_selection='selected existing session' if name=='restored-web-selected' else 'existing session already open'
+                self.checks.append('official WebKit viewport showed the same stored prompt and all three reply items')
+            else:
+                self.closeclip()
+                self.checks.append('returned from the official workspace to the native app')
+                files=['ios-native-restored.png','ios-cold-restore.mp4','ios-workspace-restored.png','ios-workspace-restore.mp4']
+                self.receipt('provenance.json',files)
+                self.finished=True
+            self.position+=1;self.last_checkpoint=name
+            print('Restored iOS XCTest checkpoint:',name,flush=True)
+            return b'ok'
+
+
+def digest(path):
+    total=hashlib.sha256()
+    with Path(path).open('rb') as contents:
+        for block in iter(lambda:contents.read(262144),b''):total.update(block)
+    return total.hexdigest()
 
 
 def server_for(scenario):
@@ -186,6 +330,8 @@ def generate(stage,src):
 
 
 def main():
+    if sys.argv[1:] not in ([],['--restored']):sys.exit('Unknown XCTest mode')
+    restored=sys.argv[1:]==['--restored']
     if (os.environ.get('GITHUB_ACTIONS'),os.environ.get('RUNNER_ENVIRONMENT'))!=('true','github-hosted'):
         sys.exit('Requires a disposable hosted runner')
     os.umask(0o077)
@@ -201,10 +347,14 @@ def main():
     installed=subprocess.run(['xcrun','simctl','get_app_container',uid,info['CFBundleIdentifier'],'app'],capture_output=True)
     if installed.returncode:sys.exit('Cached app missing from simulator')
     src=Path(__file__).resolve().parent
-    work=stage/'private-xctest'
+    work=stage/('private-restored-xctest' if restored else 'private-xctest')
     work.mkdir(mode=0o700)
     for name in ('AppDelegate.swift','HarnessMobileUITests.swift'):shutil.copyfile(src/name,work/name)
-    scenario=Scenario(stage,uid)
+    scenario=RestoredScenario(stage,uid) if restored else Scenario(stage,uid)
+    if restored:
+        scenario.ensure_cached_product(Path(installed.stdout.decode().strip()),stage/'app-build/Conduit.app',info['CFBundleExecutable'])
+        scenario.ios_runtime=next(rt.rsplit('.',1)[-1] for rt,ds in inv['devices'].items() if any(d['udid'].upper()==uid for d in ds))
+    test_method='testRestoredConduit' if restored else 'testInstalledConduit'
     server=server_for(scenario);thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
     (work/'Bootstrap.plist').write_bytes(plistlib.dumps({'endpoint':f'http://127.0.0.1:{server.server_port}','key':scenario.key}))
     def on_term(*_):raise KeyboardInterrupt
@@ -215,7 +365,7 @@ def main():
         cmd=['xcodebuild','test','-project',str(work/'HarnessQA.xcodeproj'),'-scheme','HarnessQA','-configuration','Debug',
              '-destination','platform=iOS Simulator,id='+uid,'-destination-timeout','90','-parallel-testing-enabled','NO',
              '-maximum-parallel-testing-workers','1','-jobs','1','-derivedDataPath',str(work/'DerivedData'),
-             '-resultBundlePath',str(work/'Results.xcresult'),'-only-testing:HarnessProbeUITests/HarnessMobileUITests/testInstalledConduit',
+             '-resultBundlePath',str(work/'Results.xcresult'),'-only-testing:HarnessProbeUITests/HarnessMobileUITests/'+test_method,
              'COMPILER_INDEX_STORE_ENABLE=NO','ENABLE_CODE_COVERAGE=NO']
         with (work/'xcodebuild.private.log').open('wb') as log:
             job=subprocess.Popen(cmd,stdout=log,stderr=log,start_new_session=True)
