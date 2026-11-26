@@ -42,7 +42,7 @@ class Receipt:
         if client!='127.0.0.1' or host!=f'127.0.0.1:{PORT}' or origin is not None or size!='0' or not hmac.compare_digest(cap,self.nonce):
             return 403,b''
         with self.lock:
-            expected={'initial':'credential','credential':'paired','paired':'selected','selected':'folders','folders':'verified'}.get(self.phase)
+            expected={'initial':'credential','credential':'paired','paired':'selected','selected':'folders','folders':'verified','verified':'restored'}.get(self.phase)
             if path!='/'+str(expected) or expected is None:return 409,b''
             if expected=='credential':
                 data=self.token.encode()
@@ -98,7 +98,15 @@ class Media:
         run('xcrun','simctl','io',self.device,'screenshot',str(dest))
         if dest.stat().st_size<1000 or dest.read_bytes()[:8]!=bytes.fromhex("89504e470d0a1a0a"): raise Failure('Invalid iPhone workspace image.')
     def paired(self):
-        pass
+        self.proc=subprocess.Popen(['xcrun','simctl','io',self.device,'recordVideo','--codec=h264',str(self.raw)],
+            stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        time.sleep(1)
+        if self.proc.poll() is not None:raise Failure('Simulator recording did not start.')
+    def stop_record(self):
+        if self.proc is None or self.proc.poll() is not None:raise Failure('No active simulator recording.')
+        self.proc.send_signal(signal.SIGINT)
+        self.proc.wait(timeout=25);self.proc=None
+
     def selected(self):
         self.screenshot('selected')
     def folders(self):
@@ -106,9 +114,20 @@ class Media:
         (self.out/'switch-verified').write_text(os.environ['QA_COMMIT'])
     def verified(self):
         self.screenshot('created')
+        time.sleep(1)
+        self.stop_record()
+        run('ffmpeg','-nostdin','-loglevel','error','-i',str(self.raw),'-map','0:v:0','-an','-map_metadata','-1',
+            '-vf','scale=720:-2','-c:v','libx264','-threads','2','-crf','23','-preset','fast','-pix_fmt','yuv420p','-movflags','+faststart',
+            str(self.out/'workspaces.mp4'),timeout=130)
+    def restored(self):
         (self.out/'verified').write_text(os.environ['QA_COMMIT'])
     def cleanup(self):
-        pass
+        if self.proc and self.proc.poll() is None:
+            with contextlib.suppress(Exception):self.stop_record()
+            if self.proc and self.proc.poll() is None:
+                self.proc.kill();self.proc.wait(timeout=5)
+        self.raw.unlink(missing_ok=True)
+
 
 def prepare(checkout,source):
     tests=checkout/'integration_test'
@@ -145,14 +164,14 @@ def main():
             if deps.returncode:raise Failure('Flutter integration dependencies failed.')
             command=['flutter','test','--no-pub','--reporter','expanded','-d',device,'--dart-define=GARDEN_RUN='+nonce,'integration_test/garden_device_test.dart']
             proc=subprocess.run(command,stdin=subprocess.DEVNULL,stdout=log,stderr=log,timeout=2400)
-        if proc.returncode or receipt.phase!='verified':
+        if proc.returncode or receipt.phase!='restored':
             safe=[]
             for line in (stage/'flutter-integration.private.log').read_text(errors='ignore').splitlines():
                 text=line.strip()
                 if re.fullmatch(r'(Bad state: )?(Local garden controller rejected [a-z]+\.|Garden check did not reach [A-Za-z ]+\.|Missing catalog navigation\.)',text):
                     safe.append(text)
             if safe:print('Workspace check: '+safe[-1],flush=True)
-            if receipt.phase in ('paired','selected','folders','verified'):
+            if receipt.phase in ('paired','selected','folders','verified','restored'):
                 with contextlib.suppress(Exception):media.screenshot('diagnostic')
             raise Failure('Device integration failed after fixed phase '+receipt.phase+'.')
         print('Verified workspace switch, server directory creation, registration, and scoped chat creation in the installed iPhone app.',flush=True)

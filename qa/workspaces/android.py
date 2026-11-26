@@ -29,6 +29,7 @@ def main():
     def assert_hidden(ui,s):
         if any(not n.web and n.matches(re.escape(s)) for n in ui):raise d.CheckFailed('The filtered catalog included a different workspace.')
     authenticated=False
+    recording=False
     try:
         phone.start(fresh=True)
         c,_=d.wait(phone,'backend chooser',lambda n:not n.web and n.matches('DeepSeek Harness'),timeout=100,optional=phone.recover_chooser)
@@ -38,7 +39,10 @@ def main():
         phone.tap(address);phone.enter(d.ORIGIN)
         token,_=d.wait(phone,'concealed input',lambda n:n.edit and n.secure)
         phone.tap(token);phone.enter(phone.secret);phone.hide();tap('Connect')
-        wait('Blue hour observing plan',timeout=55);wait('Three crater sketches');authenticated=True
+        wait('Blue hour observing plan',timeout=55);_,clean=wait('Three crater sketches');d.assert_clean(clean,phone.secret)
+        if any(n.edit or n.secure for n in clean):raise d.CheckFailed('Pairing input remained on screen.')
+        authenticated=True
+        phone.start_record();recording=True
         phone.phase='switch workspace';folder_open();tap('Lunar maps')
         _,ui=wait('Three crater sketches');assert_hidden(ui,'Blue hour observing plan')
         phone.shot('selected',ui)
@@ -55,10 +59,19 @@ def main():
         field,_=d.wait(phone,'new workspace composer',lambda n:n.edit and not n.secure)
         tap('Chats');wait('Meteor watch');folder_open()
         _,ui=wait('Meteor watch');phone.shot('created',ui)
+        phone.stop_record(True);recording=False
+        (phone.dest/'garden-session.mp4').rename(phone.dest/'workspaces.mp4')
+        phone.phase='cold launch'
+        phone.start()
+        _,ui=wait('Meteor watch',timeout=70)
+        assert_hidden(ui,'Blue hour observing plan');assert_hidden(ui,'Three crater sketches')
         physics=Path((stage/'workspace-home').read_text());assert physics==Path('/tmp/sky-notebooks') and (physics/'Meteor watch').is_dir()
         (phone.dest/'verified').write_text(os.environ['QA_COMMIT'])
         print('Verified switching, folder creation, registration and a new chat on the actual Android app.')
     except Exception as error:
+        if recording:
+            try:phone.stop_record(False)
+            except Exception:pass
         if authenticated:
             try: phone.shot('diagnostic',phone.items())
             except Exception: pass

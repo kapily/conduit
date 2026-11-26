@@ -2,6 +2,12 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:conduit/main.dart' as conduit;
+import 'package:conduit/features/deepseek_harness/deepseek_harness_page.dart';
+import 'package:conduit/l10n/app_localizations.dart';
+import 'package:conduit/l10n/conduit_localizations.dart';
+import 'package:conduit_core/providers/storage_providers.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:material_ui/material_ui.dart' show MaterialApp;
 import 'package:conduit/shared/widgets/adaptive_route_shell.dart';
 import 'package:conduit/shared/widgets/adaptive_toolbar_components.dart';
 import 'package:conduit/shared/widgets/platform_ui/platform_ui.dart';
@@ -91,7 +97,11 @@ void main() {
       if (Platform.isIOS && native.evaluate().isNotEmpty) {
         tester.widget<AdaptiveButton>(target.first).onPressed!();
       } else {
-        await tester.tap(target.first);
+        await until(
+          () => target.hitTestable().evaluate().isNotEmpty,
+          'visible $label',
+        );
+        await tester.tap(target.hitTestable().first);
       }
     }
 
@@ -123,7 +133,11 @@ void main() {
       Future<void> tapFinding(Finder finder, String name) async {
         await until(() => finder.evaluate().isNotEmpty, name);
         await tester.ensureVisible(finder.first);
-        await tester.tap(finder.first);
+        await until(
+          () => finder.hitTestable().evaluate().isNotEmpty,
+          'visible $name',
+        );
+        await tester.tap(finder.hitTestable().first);
         await tester.pump(const Duration(milliseconds: 500));
       }
 
@@ -199,6 +213,44 @@ void main() {
       );
       await tester.pump(const Duration(milliseconds: 500));
       await _control('verified');
+      final backingStore = ProviderScope.containerOf(
+        tester.element(add.first),
+        listen: false,
+      ).read(secureStorageProvider);
+      final fresh = ProviderContainer(
+        overrides: [secureStorageProvider.overrideWithValue(backingStore)],
+      );
+      try {
+        await tester.pumpWidget(const SizedBox());
+        await tester.pumpWidget(
+          UncontrolledProviderScope(
+            container: fresh,
+            child: MaterialApp(
+              localizationsDelegates: conduitLocalizationsDelegates,
+              supportedLocales: AppLocalizations.supportedLocales,
+              home: DeepSeekHarnessPage(
+                onConnected: () async {},
+                onDisconnected: () async {},
+                onExit: () {},
+                onOpenWorkspace: (_) async => false,
+              ),
+            ),
+          ),
+        );
+        await until(
+          () =>
+              opener.evaluate().isNotEmpty &&
+              seen('Meteor watch') &&
+              !seen('No conversations yet') &&
+              !seen('Blue hour observing plan') &&
+              !seen('Three crater sketches'),
+          'restored selected workspace and scoped catalog',
+        );
+        await _control('restored');
+      } finally {
+        await tester.pumpWidget(const SizedBox());
+        fresh.dispose();
+      }
     } finally {
       ErrorWidget.builder = testErrorWidgetBuilder;
       if (installedInput) input.unregister();
