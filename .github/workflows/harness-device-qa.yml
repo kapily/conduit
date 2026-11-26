@@ -85,8 +85,28 @@ jobs:
       - name: Generate app and package sources
         working-directory: conduit
         run: dart tool/setup_worktree.dart
+      - name: Restore public mobile build dependencies
+        id: deps
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            conduit/ios/Pods
+            ~/Library/Caches/org.swift.swiftpm/repositories
+            ~/.gradle/caches/modules-2
+            ~/.gradle/wrapper/dists
+          key: garden-deps-v1-${{ matrix.runner }}-${{ hashFiles('conduit/pubspec.lock', 'conduit/ios/Podfile.lock', 'conduit/android/**/gradle-wrapper.properties', 'conduit/ios/**/Package.resolved') }}
       - name: Build and install the real app on a fresh device
         run: cd conduit && bash ../tooling/qa/device.sh "${{ matrix.platform }}"
+      - name: Save verified public SDK dependencies before device interaction
+        if: steps.deps.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            conduit/ios/Pods
+            ~/Library/Caches/org.swift.swiftpm/repositories
+            ~/.gradle/caches/modules-2
+            ~/.gradle/wrapper/dists
+          key: ${{ steps.deps.outputs.cache-primary-key }}
       - name: Start synthetic Harness and local model
         run: python3 tooling/qa/fixture.py
       - name: Exercise native and web workspaces, then seal verified media
