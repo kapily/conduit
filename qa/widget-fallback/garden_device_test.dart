@@ -53,6 +53,7 @@ void main() {
     final installedInput = !input.isRegistered;
     if (installedInput) input.register();
     final testHandler = FlutterError.onError;
+    final testErrorWidgetBuilder = ErrorWidget.builder;
     final dispatcher = WidgetsBinding.instance.platformDispatcher;
     final platformHandler = dispatcher.onError;
     final chooser = find.byKey(const Key('backend-chooser-deepseek-harness'));
@@ -127,15 +128,25 @@ void main() {
       );
       await tester.pump(const Duration(milliseconds: 750));
       await _control('paired');
+      await Future<void>.delayed(const Duration(milliseconds: 1100));
       await press('New Chat');
       await until(() => composer.evaluate().isNotEmpty, 'native composer');
       await tester.enterText(composer, _question);
+      await Future<void>.delayed(const Duration(milliseconds: 800));
       await press('Send');
       await until(
         () => seen(_question) && _answer.every(seen),
         'complete server reply',
       );
       await tester.pump(const Duration(milliseconds: 900));
+      await until(
+        () =>
+            !seen('Stop generating') &&
+            button('Stop generating').evaluate().isEmpty,
+        'completed native turn',
+      );
+      await tester.pump();
+      await Future<void>.delayed(const Duration(seconds: 2));
       await _control('reply');
       final shell = tester
           .widgetList<AdaptiveRouteShell>(find.byType(AdaptiveRouteShell))
@@ -172,6 +183,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 600));
       await _control('history');
     } finally {
+      ErrorWidget.builder = testErrorWidgetBuilder;
       if (installedInput) input.unregister();
       FlutterError.onError = testHandler;
       dispatcher.onError = platformHandler;
