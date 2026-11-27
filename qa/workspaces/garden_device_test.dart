@@ -26,28 +26,37 @@ const _answer = [
 ];
 
 Future<String> _control(String path) async {
-  final client = HttpClient()..connectionTimeout = const Duration(seconds: 5);
-  client.findProxy = (_) => 'DIRECT';
-  try {
-    final uri = Uri(
-      scheme: 'http',
-      host: '127.0.0.1',
-      port: _controlPort,
-      path: '/$path',
-    );
-    final request = await client.postUrl(uri);
-    request.followRedirects = false;
-    request.headers.set(
-      'X-Garden-Run',
-      const String.fromEnvironment('GARDEN_RUN'),
-    );
-    request.contentLength = 0;
-    final response = await request.close().timeout(const Duration(minutes: 3));
-    if (response.statusCode != 200)
-      throw StateError('Local garden controller rejected $path.');
-    return utf8.decoder.bind(response).join();
-  } finally {
-    client.close(force: true);
+  for (var attempt = 1; ; attempt++) {
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 15);
+    client.findProxy = (_) => 'DIRECT';
+    try {
+      final uri = Uri(
+        scheme: 'http',
+        host: '127.0.0.1',
+        port: _controlPort,
+        path: '/$path',
+      );
+      final request = await client.postUrl(uri);
+      request.followRedirects = false;
+      request.headers.set(
+        'X-Garden-Run',
+        const String.fromEnvironment('GARDEN_RUN'),
+      );
+      request.contentLength = 0;
+      final response = await request.close().timeout(
+        const Duration(minutes: 3),
+      );
+      if (response.statusCode != 200)
+        throw StateError('Local garden controller rejected $path.');
+      // Consume the body before destroying the short-lived test connection.
+      return await utf8.decoder.bind(response).join();
+    } on IOException {
+      if (attempt == 3) rethrow;
+    } finally {
+      client.close(force: true);
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 400));
   }
 }
 
